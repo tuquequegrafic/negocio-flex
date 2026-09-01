@@ -1,0 +1,6 @@
+{
+  "name": "Negocio Flex",
+  "description": "Tu Negocio. Tu Marca. Tus Pedidos. Sin Límites. Plataforma SaaS para crear tu página, recibir pedidos, conectar por WhatsApp y gestionar tu negocio.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
