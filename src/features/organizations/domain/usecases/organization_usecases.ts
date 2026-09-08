@@ -129,3 +129,24 @@ export class GetOrganizationSettingsUseCase {
     return await this.repository.getSettings(organizationId);
   }
 }
+
+export class UpdateOrganizationSettingsUseCase {
+  constructor(private readonly repository: IOrganizationRepository) {}
+
+  async execute(
+    organizationId: string,
+    settings: Partial<OrganizationSettingsEntity>,
+    callerUserId: string
+  ): Promise<OrganizationSettingsEntity> {
+    if (!callerUserId) {
+      throw new UnauthorizedException('Usuario no autenticado');
+    }
+    if (!organizationId) {
+      throw new ValidationException('ID de organización no especificado');
+    }
+    return await this.repository.updateSettings(organizationId, settings, callerUserId);
+  }
+}
+
+export { GetPublicBusinessDataUseCase } from './get_public_business_data_usecase';
+

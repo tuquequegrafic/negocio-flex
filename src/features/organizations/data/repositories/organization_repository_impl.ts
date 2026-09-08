@@ -12,6 +12,7 @@ import {
   OrganizationSettingsEntity,
   OrganizationRole,
 } from '../../domain/entities/organization_entity';
+import { PublicBusinessData } from '../../domain/entities/public_business_entity';
 import { OrganizationDataSource } from '../datasources/organization_datasource';
 import { normalizeError } from '../../../../core/errors/app_exceptions';
 
@@ -26,9 +27,9 @@ export class OrganizationRepositoryImpl implements IOrganizationRepository {
     }
   }
 
-  async getOrganizationById(id: string): Promise<OrganizationEntity | null> {
+  async getOrganizationById(id: string, userId: string = ''): Promise<OrganizationEntity | null> {
     try {
-      return await this.dataSource.fetchOrganizationById(id, 'usr-001');
+      return await this.dataSource.fetchOrganizationById(id, userId);
     } catch (error) {
       throw normalizeError(error);
     }
@@ -106,6 +107,14 @@ export class OrganizationRepositoryImpl implements IOrganizationRepository {
   ): Promise<OrganizationSettingsEntity> {
     try {
       return await this.dataSource.updateSettings(organizationId, settings, callerUserId);
+    } catch (error) {
+      throw normalizeError(error);
+    }
+  }
+
+  async getPublicBusinessData(slug: string): Promise<PublicBusinessData | null> {
+    try {
+      return await this.dataSource.fetchPublicBusinessData(slug);
     } catch (error) {
       throw normalizeError(error);
     }

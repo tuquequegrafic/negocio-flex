@@ -5,13 +5,13 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { Database } from '../../types/database.types';
 import { APP_CONFIG } from '../config/app_config';
 import { logger } from '../utils/logger';
-import { NetworkException, ServerException } from '../errors/app_exceptions';
 
 class SupabaseService {
   private static instance: SupabaseService;
-  private client: SupabaseClient | null = null;
+  private client: SupabaseClient<Database> | null = null;
   private isConnected: boolean = false;
 
   private constructor() {
@@ -30,12 +30,12 @@ class SupabaseService {
       const { url, anonKey, isConfigured } = APP_CONFIG.supabase;
 
       if (!isConfigured || !url || !anonKey) {
-        logger.info('Supabase no configurado o credenciales de ejemplo detectadas. Activando modo almacenamiento local resiliente.');
+        logger.info('Supabase no configurado o credenciales de ejemplo detectadas.');
         this.client = null;
         return;
       }
 
-      this.client = createClient(url, anonKey, {
+      this.client = createClient<Database>(url, anonKey, {
         auth: {
           persistSession: true,
           autoRefreshToken: true,
@@ -43,9 +43,9 @@ class SupabaseService {
         },
       });
 
-      logger.info('Supabase Client inicializado correctamente.');
+      logger.info('Supabase Client inicializado correctamente con tipos de base de datos.');
     } catch (err) {
-      logger.warning('No fue posible inicializar el cliente de Supabase. Activando modo almacenamiento local resiliente.', err);
+      logger.warning('No fue posible inicializar el cliente de Supabase.', err);
       this.client = null;
     }
   }
@@ -56,8 +56,8 @@ class SupabaseService {
   public async checkHealth(): Promise<{ ok: boolean; message: string; isConfigured: boolean }> {
     if (!this.client) {
       return {
-        ok: true,
-        message: 'Modo Local / Standalone activo (listo para sincronización Supabase)',
+        ok: false,
+        message: 'Supabase no configurado',
         isConfigured: false,
       };
     }
@@ -67,7 +67,6 @@ class SupabaseService {
       const { error } = await this.client.from('organizations').select('id').limit(1);
       
       if (error && error.code !== 'PGRST116') {
-        // Códigos normales de tabla vacía o permisos RLS son aceptables
         logger.warning('Verificación de Supabase devolvió aviso de RLS/Tabla', error.message);
       }
 
@@ -88,7 +87,7 @@ class SupabaseService {
     }
   }
 
-  public getClient(): SupabaseClient | null {
+  public getClient(): SupabaseClient<Database> | null {
     return this.client;
   }
 

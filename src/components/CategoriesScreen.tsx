@@ -37,6 +37,8 @@ export const CategoriesScreen: React.FC = () => {
   const [icon, setIcon] = useState('🏷️');
   const [catType, setCatType] = useState<'PRODUCT' | 'SERVICE'>('PRODUCT');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const orgCategories = categories
     .filter(c => c.organization_id === currentOrg.id && c.type === activeTab)
@@ -48,6 +50,7 @@ export const CategoriesScreen: React.FC = () => {
     setDescription('');
     setIcon('🏷️');
     setCatType(activeTab);
+    setErrorMessage(null);
     setIsFormOpen(true);
   };
 
@@ -57,37 +60,59 @@ export const CategoriesScreen: React.FC = () => {
     setDescription(c.description || '');
     setIcon(c.icon || '🏷️');
     setCatType(c.type);
+    setErrorMessage(null);
     setIsFormOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || isSubmitting) return;
 
-    if (editingCatId) {
-      updateCategory(editingCatId, {
-        name: name.trim(),
-        description: description.trim(),
-        icon,
-        type: catType
-      });
-    } else {
-      addCategory({
-        organization_id: currentOrg.id,
-        name: name.trim(),
-        description: description.trim(),
-        icon,
-        type: catType,
-        display_order: orgCategories.length + 1,
-        is_active: true
-      });
+    try {
+      setIsSubmitting(true);
+      setErrorMessage(null);
+
+      if (editingCatId) {
+        await updateCategory(editingCatId, {
+          name: name.trim(),
+          description: description.trim(),
+          icon,
+          type: catType
+        });
+      } else {
+        await addCategory({
+          organization_id: currentOrg.id,
+          name: name.trim(),
+          description: description.trim(),
+          icon,
+          type: catType,
+          display_order: orgCategories.length + 1,
+          is_active: true
+        });
+      }
+
+      setIsFormOpen(false);
+      setEditingCatId(null);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Error al guardar la categoría');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setIsFormOpen(false);
-    setEditingCatId(null);
   };
 
-  const handleMove = (index: number, direction: 'UP' | 'DOWN') => {
+  const handleDelete = async (id: string) => {
+    try {
+      setIsSubmitting(true);
+      await deleteCategory(id);
+      setDeleteConfirmId(null);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Error al eliminar la categoría');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleMove = async (index: number, direction: 'UP' | 'DOWN') => {
     const newItems = [...orgCategories];
     const targetIndex = direction === 'UP' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= newItems.length) return;
@@ -101,7 +126,11 @@ export const CategoriesScreen: React.FC = () => {
       display_order: idx + 1
     }));
 
-    reorderCategories(updated);
+    try {
+      await reorderCategories(updated);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Error al ordenar las categorías');
+    }
   };
 
   const getAssociatedCount = (categoryName: string, type: 'PRODUCT' | 'SERVICE') => {
@@ -135,6 +164,22 @@ export const CategoriesScreen: React.FC = () => {
           <span>Nueva Categoría</span>
         </button>
       </div>
+
+      {/* Error Alert */}
+      {errorMessage && (
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between text-xs text-rose-700 font-bold">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+          <button
+            onClick={() => setErrorMessage(null)}
+            className="text-rose-400 hover:text-rose-700 p-1"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* 2. Tabs: Productos vs Servicios */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
@@ -253,16 +298,19 @@ export const CategoriesScreen: React.FC = () => {
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="button"
+                disabled={isSubmitting}
                 onClick={() => setIsFormOpen(false)}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 font-bold hover:bg-slate-100"
+                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 font-bold hover:bg-slate-100 disabled:opacity-50"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
-                className="px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-xs"
+                disabled={isSubmitting}
+                className="px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-xs disabled:opacity-50 flex items-center gap-2"
               >
-                {editingCatId ? 'Guardar Cambios' : 'Crear Categoría'}
+                {isSubmitting && <span className="animate-spin text-xs">⏳</span>}
+                <span>{editingCatId ? (isSubmitting ? 'Guardando...' : 'Guardar Cambios') : (isSubmitting ? 'Creando...' : 'Crear Categoría')}</span>
               </button>
             </div>
 
@@ -350,15 +398,14 @@ export const CategoriesScreen: React.FC = () => {
                       <div className="flex items-center gap-1.5 bg-rose-50 p-1 rounded-xl border border-rose-200">
                         <span className="text-[10px] text-rose-700 font-bold px-1">¿Eliminar?</span>
                         <button
-                          onClick={() => {
-                            deleteCategory(cat.id);
-                            setDeleteConfirmId(null);
-                          }}
-                          className="px-2 py-1 bg-rose-600 text-white font-bold rounded-lg text-[10px]"
+                          disabled={isSubmitting}
+                          onClick={() => handleDelete(cat.id)}
+                          className="px-2 py-1 bg-rose-600 text-white font-bold rounded-lg text-[10px] disabled:opacity-50"
                         >
                           Sí
                         </button>
                         <button
+                          disabled={isSubmitting}
                           onClick={() => setDeleteConfirmId(null)}
                           className="px-2 py-1 bg-slate-200 text-slate-700 font-bold rounded-lg text-[10px]"
                         >

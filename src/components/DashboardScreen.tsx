@@ -37,6 +37,7 @@ export const DashboardScreen: React.FC = () => {
     categories, 
     customers, 
     galleryItems,
+    appointments,
     setActiveView,
     updateOrderStatus,
     createOrder,
@@ -50,6 +51,7 @@ export const DashboardScreen: React.FC = () => {
   const orgCategories = categories.filter(c => c.organization_id === currentOrg.id);
   const orgCustomers = customers.filter(c => c.organization_id === currentOrg.id);
   const orgGallery = galleryItems.filter(g => g.organization_id === currentOrg.id);
+  const orgAppointments = appointments.filter(a => a.organization_id === currentOrg.id);
 
   // Financial calculations
   const totalSales = orgOrders.reduce((acc, curr) => acc + curr.total, 0);
@@ -466,6 +468,19 @@ export const DashboardScreen: React.FC = () => {
                 <div>
                   <span className="text-xs font-bold text-slate-900 block">Clientes</span>
                   <span className="text-[10px] text-slate-400">{orgCustomers.length} clientes</span>
+                </div>
+              </button>
+
+              <button
+                onClick={() => setActiveView('appointments')}
+                className="flex items-center gap-2.5 p-3 rounded-2xl border border-slate-200 hover:border-purple-500 hover:bg-purple-50/40 text-left transition-all group"
+              >
+                <div className="p-2 rounded-xl bg-purple-100 text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors">
+                  <Calendar className="w-4 h-4" />
+                </div>
+                <div>
+                  <span className="text-xs font-bold text-slate-900 block">Citas / Reservas</span>
+                  <span className="text-[10px] text-slate-400">{orgAppointments.length} agendadas</span>
                 </div>
               </button>
 

@@ -36,6 +36,8 @@ export const CategoriesModal: React.FC<CategoriesModalProps> = ({ isOpen, onClos
   const [icon, setIcon] = useState('🏷️');
   const [catType, setCatType] = useState<'PRODUCT' | 'SERVICE'>(typeFilter);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -49,6 +51,7 @@ export const CategoriesModal: React.FC<CategoriesModalProps> = ({ isOpen, onClos
     setDescription('');
     setIcon('🏷️');
     setCatType(activeTab);
+    setErrorMessage(null);
     setIsFormOpen(true);
   };
 
@@ -58,37 +61,47 @@ export const CategoriesModal: React.FC<CategoriesModalProps> = ({ isOpen, onClos
     setDescription(c.description || '');
     setIcon(c.icon || '🏷️');
     setCatType(c.type);
+    setErrorMessage(null);
     setIsFormOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || isSubmitting) return;
 
-    if (editingCatId) {
-      updateCategory(editingCatId, {
-        name: name.trim(),
-        description: description.trim(),
-        icon,
-        type: catType
-      });
-    } else {
-      addCategory({
-        organization_id: currentOrg.id,
-        name: name.trim(),
-        description: description.trim(),
-        icon,
-        type: catType,
-        display_order: orgCategories.length + 1,
-        is_active: true
-      });
+    try {
+      setIsSubmitting(true);
+      setErrorMessage(null);
+
+      if (editingCatId) {
+        await updateCategory(editingCatId, {
+          name: name.trim(),
+          description: description.trim(),
+          icon,
+          type: catType
+        });
+      } else {
+        await addCategory({
+          organization_id: currentOrg.id,
+          name: name.trim(),
+          description: description.trim(),
+          icon,
+          type: catType,
+          display_order: orgCategories.length + 1,
+          is_active: true
+        });
+      }
+
+      setIsFormOpen(false);
+      setEditingCatId(null);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Error al guardar la categoría');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setIsFormOpen(false);
-    setEditingCatId(null);
   };
 
-  const handleMove = (index: number, direction: 'UP' | 'DOWN') => {
+  const handleMove = async (index: number, direction: 'UP' | 'DOWN') => {
     const newItems = [...orgCategories];
     const targetIndex = direction === 'UP' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= newItems.length) return;
@@ -102,7 +115,11 @@ export const CategoriesModal: React.FC<CategoriesModalProps> = ({ isOpen, onClos
       display_order: idx + 1
     }));
 
-    reorderCategories(updated);
+    try {
+      await reorderCategories(updated);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Error al ordenar categorías');
+    }
   };
 
   const getItemCount = (catId: string, type: 'PRODUCT' | 'SERVICE') => {
@@ -112,9 +129,16 @@ export const CategoriesModal: React.FC<CategoriesModalProps> = ({ isOpen, onClos
     return services.filter(s => s.organization_id === currentOrg.id && s.category_id === catId).length;
   };
 
-  const executeDelete = (id: string) => {
-    deleteCategory(id);
-    setDeleteConfirmId(null);
+  const executeDelete = async (id: string) => {
+    try {
+      setIsSubmitting(true);
+      await deleteCategory(id);
+      setDeleteConfirmId(null);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Error al eliminar la categoría');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -138,6 +162,22 @@ export const CategoriesModal: React.FC<CategoriesModalProps> = ({ isOpen, onClos
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Error alert */}
+        {errorMessage && (
+          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center justify-between text-xs text-rose-700 font-bold">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+            <button
+              onClick={() => setErrorMessage(null)}
+              className="text-rose-400 hover:text-rose-700 p-1"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Tab switch for Products vs Services */}
         <div className="flex items-center justify-between gap-2">
@@ -227,16 +267,19 @@ export const CategoriesModal: React.FC<CategoriesModalProps> = ({ isOpen, onClos
             <div className="flex justify-end gap-2 pt-1">
               <button
                 type="button"
+                disabled={isSubmitting}
                 onClick={() => setIsFormOpen(false)}
-                className="px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white text-slate-600 font-semibold hover:bg-slate-100"
+                className="px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white text-slate-600 font-semibold hover:bg-slate-100 disabled:opacity-50"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
-                className="px-4 py-1.5 text-xs rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold shadow-xs"
+                disabled={isSubmitting}
+                className="px-4 py-1.5 text-xs rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold shadow-xs disabled:opacity-50 flex items-center gap-1.5"
               >
-                {editingCatId ? 'Guardar Cambios' : 'Crear Categoría'}
+                {isSubmitting && <span className="animate-spin text-xs">⏳</span>}
+                <span>{editingCatId ? (isSubmitting ? 'Guardando...' : 'Guardar Cambios') : (isSubmitting ? 'Creando...' : 'Crear Categoría')}</span>
               </button>
             </div>
           </form>
@@ -278,12 +321,14 @@ export const CategoriesModal: React.FC<CategoriesModalProps> = ({ isOpen, onClos
                     <div className="flex items-center gap-1.5 bg-rose-50 p-1.5 rounded-xl border border-rose-200 animate-fadeIn">
                       <span className="text-[10px] font-bold text-rose-700">¿Eliminar?</span>
                       <button
+                        disabled={isSubmitting}
                         onClick={() => executeDelete(c.id)}
-                        className="px-2 py-0.5 rounded-md bg-rose-600 text-white text-[10px] font-bold hover:bg-rose-700"
+                        className="px-2 py-0.5 rounded-md bg-rose-600 text-white text-[10px] font-bold hover:bg-rose-700 disabled:opacity-50"
                       >
                         Sí
                       </button>
                       <button
+                        disabled={isSubmitting}
                         onClick={() => setDeleteConfirmId(null)}
                         className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 text-[10px]"
                       >

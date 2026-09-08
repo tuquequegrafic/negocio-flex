@@ -37,6 +37,9 @@ import {
   Filter
 } from 'lucide-react';
 import { SubscriptionStatus, UserAccount } from '../types';
+import { SaaSMetricsService } from '../features/subscriptions/application/services/saas_metrics_service';
+import { SubscriptionEntity } from '../features/subscriptions/domain/entities/subscription_entity';
+import { PlanEntity } from '../features/subscriptions/domain/entities/plan_entity';
 
 export const SuperAdminScreen: React.FC = () => {
   const { 
@@ -79,17 +82,16 @@ export const SuperAdminScreen: React.FC = () => {
   // Account Detail Modal State
   const [inspectingUser, setInspectingUser] = useState<UserAccount | null>(null);
 
-  // SaaS Metric Calculations
+  // SaaS Metric Calculations (Centralizado en SaaSMetricsService)
+  const saasMetrics = SaaSMetricsService.calculateMetrics(
+    subscriptions as unknown as readonly SubscriptionEntity[],
+    plans as unknown as readonly PlanEntity[]
+  );
   const activeSubs = subscriptions.filter(s => s.status === 'active');
   const trialSubs = subscriptions.filter(s => s.status === 'trial');
   const pastDueSubs = subscriptions.filter(s => s.status === 'past_due');
-
-  const mrr = activeSubs.reduce((acc, sub) => {
-    const plan = plans.find(p => p.id === sub.plan_id);
-    return acc + (plan?.price_monthly || 0);
-  }, 0);
-
-  const arr = mrr * 12;
+  const mrr = saasMetrics.mrr;
+  const arr = saasMetrics.arr;
 
   // Pending users
   const pendingUsers = users.filter(u => u.status === 'PENDING_APPROVAL');

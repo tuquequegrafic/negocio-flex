@@ -54,15 +54,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     }
   };
 
-  const handleQuickDemo = async (role: 'owner' | 'admin') => {
+  const handleQuickDemo = (role: 'owner' | 'admin') => {
     if (isLoading) return;
     const demoEmail = role === 'admin' ? 'superadmin@negocioflex.pe' : 'dueno@negocioflex.pe';
     setEmail(demoEmail);
     setPassword('demo1234');
-    const success = await login(demoEmail, 'demo1234');
-    if (success) {
-      onLoginSuccess();
-    }
+    setFormErrors({});
+    clearError();
   };
 
   return (

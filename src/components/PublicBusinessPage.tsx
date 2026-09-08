@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { formatCurrency, generateWhatsAppLink, isBusinessOpenNow } from '../core/utils/formatters';
 import { 
@@ -30,30 +30,32 @@ import {
   Copy,
   Info,
   CheckCircle2,
-  Smartphone
+  Smartphone,
+  QrCode,
+  RefreshCw,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { TutorialModal } from './TutorialModal';
 import { InstallAppModal } from './InstallAppModal';
 import { BrandLogo } from './BrandLogo';
+import { PublicQrCodeModal } from './PublicQrCodeModal';
+import { usePublicBusinessData } from '../features/organizations/presentation/hooks/use_public_business_data';
+import { buildPublicBusinessUrl } from '../core/utils/public_url_helper';
+import { GoogleMapsValidator } from '../core/validators/app_validators';
 
 interface PublicBusinessPageProps {
   businessSlug?: string;
   onBackToAdmin?: () => void;
+  onLoginClick?: () => void;
 }
 
 export const PublicBusinessPage: React.FC<PublicBusinessPageProps> = ({ 
   businessSlug, 
-  onBackToAdmin 
+  onBackToAdmin,
+  onLoginClick 
 }) => {
   const { 
     currentOrg, 
-    organizations,
-    products, 
-    services, 
-    categories, 
-    businessHours,
-    galleryItems,
     cart, 
     addToCart, 
     updateCartQuantity,
@@ -61,17 +63,18 @@ export const PublicBusinessPage: React.FC<PublicBusinessPageProps> = ({
     clearCart,
     createOrder,
     createAppointment,
+    checkAppointmentOverlap,
     setActiveView 
   } = useApp();
 
-  // Find business by slug if provided, otherwise default to currentOrg
-  const targetOrg = businessSlug 
-    ? organizations.find(o => o.slug === businessSlug || o.id === businessSlug) 
-    : currentOrg;
+  // Fase 7: Carga desacoplada y real de datos del catálogo público mediante Clean Architecture
+  const effectiveSlug = businessSlug || currentOrg?.slug;
+  const { loading, error, publicData, reload } = usePublicBusinessData(effectiveSlug);
 
   // Selected Photo for Lightbox Modal
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
 
   // Selected Product for Details Modal
   const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
@@ -100,9 +103,130 @@ export const PublicBusinessPage: React.FC<PublicBusinessPageProps> = ({
   const [bookingDate, setBookingDate] = useState(new Date().toISOString().split('T')[0]);
   const [bookingTime, setBookingTime] = useState('15:00');
   const [bookingCompleted, setBookingCompleted] = useState<any | null>(null);
+  const [bookingWarning, setBookingWarning] = useState<string | null>(null);
+  const [isBookingSubmitting, setIsBookingSubmitting] = useState(false);
 
-  // If business does NOT exist
-  if (!targetOrg) {
+  // SEO & OpenGraph Dinámico (Requisito 18 Fase 7)
+  useEffect(() => {
+    if (!publicData?.organization) return;
+    const org = publicData.organization;
+    const settings = publicData.settings;
+    const title = org.seo_title || `${org.name} — ${settings.slogan || org.description || 'Catálogo Digital Oficial'}`;
+    const description = org.seo_description || org.description || `Visita el catálogo digital oficial de ${org.name}. Consulta productos, servicios y realiza pedidos o citas online de forma fácil y rápida.`;
+    const imageUrl = settings.cover_url || settings.logo_url || '';
+    const currentUrl = typeof window !== 'undefined' ? window.location.href : buildPublicBusinessUrl(org.slug);
+
+    const prevTitle = document.title;
+    document.title = title;
+
+    const setMetaTag = (selector: string, attr: string, value: string) => {
+      let element = document.querySelector(selector);
+      if (!element) {
+        element = document.createElement('meta');
+        const [k, v] = selector.replace(/[\[\]"]/g, '').split('=');
+        element.setAttribute(k, v);
+        document.head.appendChild(element);
+      }
+      element.setAttribute(attr, value);
+    };
+
+    setMetaTag('meta[name="description"]', 'content', description);
+    setMetaTag('meta[property="og:title"]', 'content', title);
+    setMetaTag('meta[property="og:description"]', 'content', description);
+    if (imageUrl) setMetaTag('meta[property="og:image"]', 'content', imageUrl);
+    setMetaTag('meta[property="og:url"]', 'content', currentUrl);
+    setMetaTag('meta[property="og:type"]', 'content', 'website');
+
+    return () => {
+      document.title = prevTitle;
+      const defaultDesc = 'Plataforma integral multi-inquilino de gestión y comercio para negocios y servicios.';
+      setMetaTag('meta[name="description"]', 'content', defaultDesc);
+      setMetaTag('meta[property="og:title"]', 'content', 'Negocio Flex');
+      setMetaTag('meta[property="og:description"]', 'content', defaultDesc);
+    };
+  }, [publicData]);
+
+  // 1. ESTADO DE CARGA: Skeleton Loader Elegante
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-100 animate-pulse">
+        {/* Top bar skeleton */}
+        <div className="h-12 bg-slate-900 border-b border-slate-800" />
+        {/* Hero banner skeleton */}
+        <div className="h-48 sm:h-64 bg-slate-300 w-full" />
+        {/* Info card skeleton */}
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 -mt-16">
+          <div className="bg-white rounded-3xl p-6 shadow-md border border-slate-200/80 space-y-4">
+            <div className="flex items-center gap-4">
+              <div className="w-20 h-20 bg-slate-200 rounded-2xl shrink-0 -mt-10 border-4 border-white" />
+              <div className="flex-1 space-y-2">
+                <div className="h-6 bg-slate-200 rounded-lg w-48" />
+                <div className="h-4 bg-slate-100 rounded-md w-72" />
+              </div>
+            </div>
+            <div className="h-4 bg-slate-100 rounded w-full max-w-md" />
+          </div>
+        </div>
+        {/* Tabs skeleton */}
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 mt-6">
+          <div className="h-12 bg-white rounded-2xl border border-slate-200/80" />
+        </div>
+        {/* Cards grid skeleton */}
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 mt-6 pb-20">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <div key={i} className="bg-white rounded-3xl p-4 border border-slate-200/80 space-y-3">
+                <div className="h-44 bg-slate-200 rounded-2xl w-full" />
+                <div className="h-5 bg-slate-200 rounded w-3/4" />
+                <div className="h-4 bg-slate-100 rounded w-1/2" />
+                <div className="h-10 bg-slate-200 rounded-xl w-full mt-4" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. ESTADO DE ERROR DE CONEXIÓN (con Reintentar)
+  if (error && !publicData) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+        <div className="bg-white max-w-md w-full p-8 rounded-3xl border border-slate-200/80 shadow-xl text-center space-y-5">
+          <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto shadow-xs">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+          <div>
+            <h1 className="text-xl font-extrabold text-slate-900">Problema al cargar el catálogo</h1>
+            <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+              {error || 'No pudimos conectar con el servidor para obtener los datos del negocio.'}
+            </p>
+          </div>
+          <div className="pt-2 space-y-2">
+            <button
+              onClick={() => reload()}
+              className="w-full py-3 rounded-2xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>Reintentar Conexión</span>
+            </button>
+            <button
+              onClick={() => {
+                if (onBackToAdmin) onBackToAdmin();
+                else setActiveView('dashboard');
+              }}
+              className="w-full py-3 rounded-2xl bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200 transition-all cursor-pointer"
+            >
+              Volver
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 3. ESTADO 404: Negocio No Encontrado
+  if (!publicData) {
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
         <div className="bg-white max-w-md w-full p-8 rounded-3xl border border-slate-200/80 shadow-xl text-center space-y-5">
@@ -112,7 +236,7 @@ export const PublicBusinessPage: React.FC<PublicBusinessPageProps> = ({
           <div>
             <h1 className="text-xl font-extrabold text-slate-900">Negocio no encontrado</h1>
             <p className="text-xs text-slate-500 mt-2 leading-relaxed">
-              La página o enlace <code className="bg-slate-100 px-1.5 py-0.5 rounded text-rose-600 font-mono text-[11px]">/r/{businessSlug}</code> que estás buscando no existe o ya no está disponible.
+              La página o enlace <code className="bg-slate-100 px-1.5 py-0.5 rounded text-rose-600 font-mono text-[11px]">/r/{effectiveSlug}</code> que estás buscando no existe o fue dada de baja.
             </p>
           </div>
           <div className="pt-2">
@@ -121,7 +245,7 @@ export const PublicBusinessPage: React.FC<PublicBusinessPageProps> = ({
                 if (onBackToAdmin) onBackToAdmin();
                 else setActiveView('dashboard');
               }}
-              className="w-full py-3 rounded-2xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 transition-all shadow-md"
+              className="w-full py-3 rounded-2xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 transition-all shadow-md cursor-pointer"
             >
               Volver al Inicio
             </button>
@@ -131,8 +255,8 @@ export const PublicBusinessPage: React.FC<PublicBusinessPageProps> = ({
     );
   }
 
-  // If business is deactivated (is_active = false)
-  if (targetOrg.is_active === false) {
+  // 4. ESTADO INACTIVO: Negocio Temporalmente Desactivado (is_active = false)
+  if (publicData.organization.is_active === false) {
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
         <div className="bg-white max-w-md w-full p-8 rounded-3xl border border-slate-200/80 shadow-xl text-center space-y-5">
@@ -140,76 +264,68 @@ export const PublicBusinessPage: React.FC<PublicBusinessPageProps> = ({
             🔒
           </div>
           <div>
-            <h1 className="text-xl font-extrabold text-slate-900">Página Temporalmente No Disponible</h1>
+            <h1 className="text-xl font-extrabold text-slate-900">Este negocio no está disponible temporalmente</h1>
             <p className="text-xs text-slate-500 mt-2 leading-relaxed">
-              El negocio <strong>{targetOrg.name}</strong> se encuentra temporalmente fuera de servicio o en mantenimiento.
+              El negocio <strong>{publicData.organization.name}</strong> se encuentra temporalmente fuera de servicio o en mantenimiento. Te invitamos a visitarnos nuevamente más tarde.
             </p>
           </div>
           <div className="pt-2">
-            <button
-              onClick={() => {
-                if (onBackToAdmin) onBackToAdmin();
-                else setActiveView('dashboard');
-              }}
-              className="w-full py-3 rounded-2xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 transition-all shadow-md"
-            >
-              Regresar al Panel
-            </button>
+            {onBackToAdmin ? (
+              <button
+                onClick={onBackToAdmin}
+                className="w-full py-3 rounded-2xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 transition-all shadow-md cursor-pointer"
+              >
+                Regresar al Panel
+              </button>
+            ) : (
+              <a
+                href="/"
+                className="block w-full py-3 rounded-2xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 transition-all shadow-md"
+              >
+                Ir a la Página Principal
+              </a>
+            )}
           </div>
         </div>
       </div>
     );
   }
 
-  const settings = targetOrg.settings || {
-    organization_id: targetOrg.id,
-    logo_url: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=200&auto=format&fit=crop&q=80',
-    cover_url: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=1200&auto=format&fit=crop&q=80',
-    primary_color: '#B91C1C',
-    secondary_color: '#DC2626',
-    text_color: '#111827',
-    accent_color: '#F59E0B',
-    address: 'Av. Principal 123',
-    phone: '+51 987 654 321',
-    whatsapp_number: '51987654321',
-    whatsapp_message: '¡Hola! Quisiera realizar una consulta.',
-    email: 'contacto@negocio.com',
-    currency: 'S/',
-    active_modules: {
-      products: true,
-      services: false,
-      categories: true,
-      orders: true,
-      appointments: false,
-      delivery: true,
-      promotions: true,
-      gallery: true,
-      whatsapp: true,
-      hours: true,
-      location: true,
-      testimonials: false,
-      social: true,
-      notifications: true,
-      analytics: true
-    }
+  // 5. NEGOCIO ACTIVO: Extraer datos del objeto PublicBusinessData
+  const targetOrg = publicData.organization;
+  const settings = publicData.settings;
+  const orgProducts = publicData.products;
+  const orgServices = publicData.services;
+  const orgCategories = publicData.categories;
+  const orgHours = publicData.businessHours;
+  const orgGallery = publicData.gallery;
+
+  const modules = settings.active_modules || {
+    products: true,
+    services: true,
+    categories: true,
+    orders: true,
+    appointments: true,
+    delivery: true,
+    promotions: true,
+    gallery: true,
+    whatsapp: true,
+    hours: true,
+    location: true,
+    testimonials: true,
+    social: true,
+    notifications: true,
+    analytics: true
   };
-
-  const modules = settings.active_modules;
   const currency = settings.currency || 'S/';
-
-  const orgProducts = products.filter(p => p.organization_id === targetOrg.id && p.is_active);
-  const orgServices = services.filter(s => s.organization_id === targetOrg.id && s.is_active);
-  const orgCategories = categories.filter(c => c.organization_id === targetOrg.id && c.is_active);
-  const orgHours = businessHours.filter(h => h.organization_id === targetOrg.id);
-  const orgGallery = galleryItems.filter(g => g.organization_id === targetOrg.id);
 
   // Set default tab on load based on active modules
   useEffect(() => {
-    if (modules.products) setActiveTab('products');
-    else if (modules.services) setActiveTab('services');
-    else if (modules.gallery) setActiveTab('gallery');
+    if (modules.products && orgProducts.length > 0) setActiveTab('products');
+    else if (modules.services && orgServices.length > 0) setActiveTab('services');
+    else if (modules.gallery && orgGallery.length > 0) setActiveTab('gallery');
     else setActiveTab('hours');
-  }, [targetOrg.id]);
+  }, [targetOrg.id, modules.products, modules.services, modules.gallery, orgProducts.length, orgServices.length, orgGallery.length]);
 
   useEffect(() => {
     if (orgServices.length > 0 && !selectedServiceId) {
@@ -313,48 +429,87 @@ ${deliveryType === 'DELIVERY' && customerReference.trim() ? `📝 *Referencia:* 
     setCartStep('CONFIRMATION');
   };
 
-  const handleBookingSubmit = (e: React.FormEvent) => {
+  const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customerName || !customerPhone || !selectedServiceId) return;
+    if (!customerName.trim() || !customerPhone.trim() || !selectedServiceId) return;
 
     const serv = orgServices.find(s => s.id === selectedServiceId);
     if (!serv) return;
 
-    const newApt = createAppointment({
-      organization_id: targetOrg.id,
-      service_id: serv.id,
-      service_name: serv.name,
-      service_price: serv.price,
-      duration_minutes: serv.duration_minutes,
-      customer_name: customerName,
-      customer_phone: customerPhone,
-      appointment_date: bookingDate,
-      start_time: bookingTime,
-      end_time: '16:00',
-      status: 'PENDING',
-      notes: notes || undefined
-    });
+    setBookingWarning(null);
 
-    confetti({
-      particleCount: 90,
-      spread: 60,
-      origin: { y: 0.6 }
-    });
+    const [h, m] = (bookingTime || '10:00').split(':').map(Number);
+    const totalM = ((isNaN(h) ? 10 : h) * 60) + (isNaN(m) ? 0 : m) + (serv.duration_minutes || 30);
+    const endH = Math.floor(totalM / 60) % 24;
+    const endM = totalM % 60;
+    const calculatedEndTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
 
-    setBookingCompleted(newApt);
+    setIsBookingSubmitting(true);
+    try {
+      // Validar solapamiento atómicamente para el tenant específico antes de registrar
+      const hasConflict = await checkAppointmentOverlap(
+        bookingDate,
+        bookingTime,
+        calculatedEndTime,
+        undefined,
+        undefined,
+        targetOrg.id
+      );
+      if (hasConflict) {
+        setBookingWarning('El horario seleccionado ya no está disponible. Por favor elige otra hora o fecha.');
+        return;
+      }
+
+      const newApt = await createAppointment({
+        organization_id: targetOrg.id,
+        service_id: serv.id,
+        service_name: serv.name,
+        service_price: serv.price,
+        duration_minutes: serv.duration_minutes,
+        customer_name: customerName.trim(),
+        customer_phone: customerPhone.trim(),
+        appointment_date: bookingDate,
+        start_time: bookingTime,
+        end_time: calculatedEndTime,
+        status: 'PENDING',
+        notes: notes.trim() || undefined
+      });
+
+      confetti({
+        particleCount: 90,
+        spread: 60,
+        origin: { y: 0.6 }
+      });
+
+      setBookingCompleted(newApt);
+    } catch (err: any) {
+      console.error('Error registrando reserva pública:', err);
+      setBookingWarning(err.message || 'Ocurrió un error al agendar tu cita. Por favor intenta de nuevo.');
+    } finally {
+      setIsBookingSubmitting(false);
+    }
   };
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans antialiased text-slate-800 pb-20 selection:bg-slate-900 selection:text-white">
       
-      {/* 1. TOP ADMIN BAR (Only for preview / admin navigation) */}
+      {/* 1. TOP BAR */}
       <header className="bg-slate-950 text-white px-4 py-2.5 flex items-center justify-between text-xs sticky top-0 z-50 shadow-md">
-        <div className="flex items-center gap-2.5 max-w-xl truncate">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-          <span className="text-slate-300">Página Pública Activa:</span>
-          <span className="font-mono bg-slate-800 px-2 py-0.5 rounded text-emerald-400 font-bold">
-            /r/{targetOrg.slug}
-          </span>
+        <div className="flex items-center gap-2 max-w-xl truncate">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+          {onBackToAdmin ? (
+            <>
+              <span className="text-slate-300">Modo Administrador:</span>
+              <span className="font-mono bg-slate-800 px-2 py-0.5 rounded text-emerald-400 font-bold">
+                /r/{targetOrg.slug}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="font-semibold text-white truncate">{targetOrg.name}</span>
+              <span className="text-slate-400 hidden md:inline text-[11px]">— Catálogo Digital Oficial</span>
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -377,24 +532,40 @@ ${deliveryType === 'DELIVERY' && customerReference.trim() ? `📝 *Referencia:* 
           </button>
 
           <button
+            onClick={() => setIsQrModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all border border-slate-700 cursor-pointer"
+            title="Ver y Descargar Código QR"
+          >
+            <QrCode className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="hidden sm:inline">Código QR</span>
+          </button>
+
+          <button
             onClick={handleCopyShareLink}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all cursor-pointer"
             title="Copiar enlace para compartir"
           >
             {copiedLink ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
             <span>{copiedLink ? '¡Enlace Copiado!' : 'Copiar URL'}</span>
           </button>
 
-          <button
-            onClick={() => {
-              if (onBackToAdmin) onBackToAdmin();
-              else setActiveView('dashboard');
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-xs"
-          >
-            <ChevronLeft className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Volver al Panel</span>
-          </button>
+          {onBackToAdmin ? (
+            <button
+              onClick={onBackToAdmin}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Volver al Panel</span>
+            </button>
+          ) : onLoginClick ? (
+            <button
+              onClick={onLoginClick}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all cursor-pointer"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Acceso Admin</span>
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -496,8 +667,17 @@ ${deliveryType === 'DELIVERY' && customerReference.trim() ? `📝 *Referencia:* 
               )}
 
               <button
+                onClick={() => setIsQrModalOpen(true)}
+                className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-colors cursor-pointer"
+                title="Ver y Descargar Código QR"
+              >
+                <QrCode className="w-4 h-4 text-slate-700" />
+                <span className="hidden sm:inline">QR</span>
+              </button>
+
+              <button
                 onClick={handleCopyShareLink}
-                className="p-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
+                className="p-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
                 title="Compartir enlace"
               >
                 <Share2 className="w-4 h-4" />
@@ -1020,12 +1200,20 @@ ${deliveryType === 'DELIVERY' && customerReference.trim() ? `📝 *Referencia:* 
                   </div>
                 </div>
 
+                {bookingWarning && (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                    <span>{bookingWarning}</span>
+                  </div>
+                )}
+
                 <button
                   type="submit"
-                  className="w-full py-3.5 rounded-2xl font-bold text-xs sm:text-sm text-white shadow-md transition-all active:scale-95 mt-4"
+                  disabled={isBookingSubmitting}
+                  className="w-full py-3.5 rounded-2xl font-bold text-xs sm:text-sm text-white shadow-md transition-all active:scale-95 mt-4 disabled:opacity-50"
                   style={{ backgroundColor: settings.primary_color }}
                 >
-                  Confirmar y Solicitar Cita
+                  {isBookingSubmitting ? 'Verificando y Agendando...' : 'Confirmar y Solicitar Cita'}
                 </button>
               </form>
             )}
@@ -1655,6 +1843,28 @@ ${deliveryType === 'DELIVERY' && customerReference.trim() ? `📝 *Referencia:* 
                   </a>
                 </div>
 
+                {/* Google Maps Iframe seguro si está configurado y validado */}
+                {(() => {
+                  const rawEmbed = targetOrg.map_embed_url || settings.map_embed_url;
+                  if (!rawEmbed || !GoogleMapsValidator.isSafeEmbedUrl(rawEmbed)) return null;
+
+                  return (
+                    <div className="w-full h-64 rounded-2xl overflow-hidden border border-slate-200/80 shadow-xs mt-3">
+                      <iframe
+                        src={rawEmbed}
+                        width="100%"
+                        height="100%"
+                        style={{ border: 0 }}
+                        allowFullScreen={false}
+                        loading="lazy"
+                        sandbox="allow-scripts allow-same-origin"
+                        referrerPolicy="no-referrer"
+                        title={`Ubicación de ${targetOrg.name}`}
+                      />
+                    </div>
+                  );
+                })()}
+
                 {modules.whatsapp && (
                   <a
                     href={generateWhatsAppLink(settings.whatsapp_number, `Hola, me gustaría saber cómo llegar al local de ${targetOrg.name}.`)}
@@ -1950,6 +2160,16 @@ ${deliveryType === 'DELIVERY' && customerReference.trim() ? `📝 *Referencia:* 
         businessName={targetOrg?.name || 'Tienda'}
         businessSlug={targetOrg?.slug}
         targetRole="CUSTOMER"
+      />
+
+      {/* 13. MODAL: CÓDIGO QR Y COMPARTIR (FASE 7) */}
+      <PublicQrCodeModal
+        isOpen={isQrModalOpen}
+        onClose={() => setIsQrModalOpen(false)}
+        businessName={targetOrg.name}
+        slug={targetOrg.slug}
+        logoUrl={settings.logo_url}
+        primaryColor={settings.primary_color}
       />
 
     </div>

@@ -9,6 +9,7 @@ import {
   BusinessType,
   OrganizationRole,
 } from '../entities/organization_entity';
+import { PublicBusinessData } from '../entities/public_business_entity';
 
 export interface CreateOrganizationParams {
   name: string;
@@ -28,7 +29,7 @@ export interface IOrganizationRepository {
   /**
    * Obtiene la información detallada de una organización por su ID
    */
-  getOrganizationById(id: string): Promise<OrganizationEntity | null>;
+  getOrganizationById(id: string, userId?: string): Promise<OrganizationEntity | null>;
 
   /**
    * Busca una organización por su slug público único
@@ -78,4 +79,11 @@ export interface IOrganizationRepository {
     settings: Partial<OrganizationSettingsEntity>,
     callerUserId: string
   ): Promise<OrganizationSettingsEntity>;
+
+  /**
+   * Obtiene la información pública consolidada de un negocio por su slug (Fase 7)
+   * Incluye datos del negocio, branding, categorías activas, productos activos,
+   * servicios activos, horarios y galería.
+   */
+  getPublicBusinessData(slug: string): Promise<PublicBusinessData | null>;
 }

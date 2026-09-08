@@ -208,6 +208,7 @@ CREATE TABLE IF NOT EXISTS public.customers (
   total_orders INTEGER DEFAULT 1,
   total_spent NUMERIC(10, 2) DEFAULT 0.00,
   last_order_date TIMESTAMPTZ DEFAULT NOW(),
+  last_order_number TEXT DEFAULT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(organization_id, phone)
@@ -367,7 +368,7 @@ CREATE POLICY "Members can update their settings"
   ON public.organization_settings FOR UPDATE
   USING (public.is_member_of_org(organization_id));
 
--- POLÍTICAS: PRODUCTS & CATEGORIES
+-- POLÍTICAS: PRODUCTS & CATEGORIES & SERVICES
 CREATE POLICY "Public can view active products and categories"
   ON public.categories FOR SELECT
   USING (is_active = TRUE OR public.is_member_of_org(organization_id));
@@ -382,6 +383,14 @@ CREATE POLICY "Members can manage products"
 
 CREATE POLICY "Members can manage categories"
   ON public.categories FOR ALL
+  USING (public.is_member_of_org(organization_id));
+
+CREATE POLICY "Public can view active services"
+  ON public.services FOR SELECT
+  USING (is_active = TRUE OR public.is_member_of_org(organization_id));
+
+CREATE POLICY "Members can manage services"
+  ON public.services FOR ALL
   USING (public.is_member_of_org(organization_id));
 
 -- POLÍTICAS: ORDERS & APPOINTMENTS
@@ -399,10 +408,152 @@ CREATE POLICY "Members can update their own org orders"
   ON public.orders FOR UPDATE
   USING (public.is_member_of_org(organization_id));
 
--- POLÍTICAS: CUSTOMERS & SUBSCRIPTIONS
-CREATE POLICY "Members can view and manage their customers"
-  ON public.customers FOR ALL
+-- POLÍTICAS: CUSTOMERS (CRM PRIVADO)
+CREATE POLICY "Customers select policy"
+  ON public.customers FOR SELECT
   USING (public.is_member_of_org(organization_id));
+
+CREATE POLICY "Customers insert policy"
+  ON public.customers FOR INSERT
+  WITH CHECK (
+    public.is_member_of_org(organization_id) AND 
+    public.get_user_org_role(organization_id) IN ('owner', 'admin', 'staff', 'super_admin')
+  );
+
+CREATE POLICY "Customers update policy"
+  ON public.customers FOR UPDATE
+  USING (
+    public.is_member_of_org(organization_id) AND 
+    public.get_user_org_role(organization_id) IN ('owner', 'admin', 'staff', 'super_admin')
+  )
+  WITH CHECK (
+    public.is_member_of_org(organization_id) AND 
+    public.get_user_org_role(organization_id) IN ('owner', 'admin', 'staff', 'super_admin')
+  );
+
+CREATE POLICY "Customers delete policy"
+  ON public.customers FOR DELETE
+  USING (public.get_user_org_role(organization_id) IN ('owner', 'admin', 'super_admin'));
+
+-- POLÍTICAS: APPOINTMENTS (RESERVAS / CITAS)
+CREATE POLICY "Appointments public insert policy"
+  ON public.appointments FOR INSERT
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.organizations o
+      WHERE o.id = appointments.organization_id AND o.is_active = TRUE
+    )
+  );
+
+CREATE POLICY "Appointments members select policy"
+  ON public.appointments FOR SELECT
+  USING (public.is_member_of_org(organization_id));
+
+CREATE POLICY "Appointments members update policy"
+  ON public.appointments FOR UPDATE
+  USING (
+    public.get_user_org_role(organization_id) IN ('owner', 'admin', 'staff', 'super_admin')
+  );
+
+CREATE POLICY "Appointments delete policy"
+  ON public.appointments FOR DELETE
+  USING (
+    public.get_user_org_role(organization_id) IN ('owner', 'super_admin')
+  );
+
+-- ------------------------------------------------------------------------------
+-- TRIGGER & FUNCIÓN: PREVENCIÓN ATÓMICA DE DOBLE RESERVA / CONCURRENCIA (FASE 6)
+-- ------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.prevent_appointment_overlap()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_conflict_id UUID;
+  v_lock_key BIGINT;
+  v_staff_key TEXT;
+BEGIN
+  IF NEW.status = 'CANCELLED' THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.end_time <= NEW.start_time THEN
+    RAISE EXCEPTION 'VALIDATION_ERROR: La hora de fin (%) debe ser posterior a la hora de inicio (%)', NEW.end_time, NEW.start_time
+      USING ERRCODE = '22000';
+  END IF;
+
+  -- Advisory lock transaccional por organización, fecha y staff
+  v_staff_key := COALESCE(NULLIF(TRIM(LOWER(NEW.staff_name)), ''), NEW.staff_id::text, 'GLOBAL_STAFF');
+  v_lock_key := ('x' || SUBSTR(MD5(NEW.organization_id::text || '_' || NEW.appointment_date::text || '_' || v_staff_key), 1, 16))::bit(64)::bigint;
+
+  PERFORM pg_advisory_xact_lock(v_lock_key);
+
+  SELECT id INTO v_conflict_id
+  FROM public.appointments
+  WHERE organization_id = NEW.organization_id
+    AND appointment_date = NEW.appointment_date
+    AND status != 'CANCELLED'
+    AND id != COALESCE(NEW.id, '00000000-0000-0000-0000-000000000000'::uuid)
+    AND (
+      (NEW.staff_id IS NOT NULL AND staff_id IS NOT NULL AND NEW.staff_id = staff_id)
+      OR
+      (NEW.staff_name IS NOT NULL AND staff_name IS NOT NULL AND LOWER(TRIM(NEW.staff_name)) = LOWER(TRIM(staff_name)) AND TRIM(NEW.staff_name) != '')
+      OR
+      ((NEW.staff_id IS NULL AND (NEW.staff_name IS NULL OR TRIM(NEW.staff_name) = '')) OR (staff_id IS NULL AND (staff_name IS NULL OR TRIM(staff_name) = '')))
+    )
+    AND (start_time < NEW.end_time AND end_time > NEW.start_time)
+  LIMIT 1;
+
+  IF v_conflict_id IS NOT NULL THEN
+    RAISE EXCEPTION 'CONFLICT_OVERLAP: El horario % - % ya se encuentra reservado para esta fecha.', NEW.start_time, NEW.end_time
+      USING ERRCODE = '23P01';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_prevent_appointment_overlap ON public.appointments;
+CREATE TRIGGER trg_prevent_appointment_overlap
+  BEFORE INSERT OR UPDATE ON public.appointments
+  FOR EACH ROW
+  EXECUTE FUNCTION public.prevent_appointment_overlap();
+
+-- RPC: Consulta Pública Segura de Disponibilidad Horaria (Fase 6)
+CREATE OR REPLACE FUNCTION public.get_public_appointment_slots(
+  p_organization_id UUID,
+  p_date DATE
+)
+RETURNS TABLE (
+  start_time TEXT,
+  end_time TEXT,
+  staff_name TEXT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.organizations 
+    WHERE id = p_organization_id AND is_active = TRUE
+  ) THEN
+    RETURN;
+  END IF;
+
+  RETURN QUERY
+  SELECT a.start_time, a.end_time, COALESCE(a.staff_name, '')
+  FROM public.appointments a
+  WHERE a.organization_id = p_organization_id
+    AND a.appointment_date = p_date
+    AND a.status != 'CANCELLED'
+  ORDER BY a.start_time ASC;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_public_appointment_slots(UUID, DATE) TO anon, authenticated;
 
 CREATE POLICY "Members can view their subscription"
   ON public.subscriptions FOR SELECT

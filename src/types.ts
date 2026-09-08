@@ -51,6 +51,7 @@ export interface OrganizationSettings {
   active_modules: OrganizationModules;
   currency: string;
   slogan?: string;
+  map_embed_url?: string;
 }
 
 export interface Organization {
@@ -65,6 +66,9 @@ export interface Organization {
   created_by: string;
   created_at: string;
   settings?: OrganizationSettings;
+  seo_title?: string;
+  seo_description?: string;
+  map_embed_url?: string;
 }
 
 export interface OrganizationMember {
@@ -107,6 +111,12 @@ export interface Product {
   price: number;
   promo_price?: number;
   stock: number;
+  cost_price?: number;
+  sku?: string;
+  barcode?: string;
+  track_inventory?: boolean;
+  min_stock_alert?: number;
+  allow_negative_stock?: boolean;
   is_active: boolean;
   is_featured?: boolean;
   display_order?: number;
@@ -333,3 +343,41 @@ export interface WebhookLog {
   status: 'PROCESSED' | 'FAILED';
   created_at: string;
 }
+
+export type InventoryMovementType = 
+  | 'PURCHASE'
+  | 'SALE'
+  | 'RETURN'
+  | 'ADJUSTMENT'
+  | 'CANCELLATION'
+  | 'REVERSAL'
+  | 'INITIAL_LOAD';
+
+export type InventoryReferenceType = 
+  | 'ORDER'
+  | 'PURCHASE_ORDER'
+  | 'MANUAL_ADJUSTMENT'
+  | 'INITIAL_INVENTORY'
+  | 'IMPORT'
+  | 'REVERSAL';
+
+export type StockAlertLevel = 'STOCK_OK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+
+export interface InventoryMovement {
+  id: string;
+  organization_id: string;
+  product_id: string;
+  product_name?: string;
+  movement_type: InventoryMovementType;
+  quantity: number;
+  stock_before: number;
+  stock_after: number;
+  unit_cost: number;
+  total_cost: number;
+  reference_type: InventoryReferenceType;
+  reference_id?: string;
+  reason?: string;
+  created_by?: string;
+  created_at: string;
+}
+

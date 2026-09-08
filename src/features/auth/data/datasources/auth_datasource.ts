@@ -1,16 +1,17 @@
 /**
  * Negocio Flex - Auth & Profile Datasource
- * Conecta con Supabase Auth, PostgreSQL `profiles`, y Supabase Storage `avatars`.
- * Provee almacenamiento local seguro y modo autónomo resiliente.
+ * Conecta exclusivamente con Supabase Auth, PostgreSQL `profiles` y Supabase Storage `avatars`.
+ * Sin creación de usuarios ni sesiones simuladas/mock.
  */
 
 import { supabaseService } from '../../../../core/network/supabase_client';
-import { STORAGE_KEYS, STORAGE_BUCKETS } from '../../../../core/constants/app_constants';
+import { STORAGE_BUCKETS } from '../../../../core/constants/app_constants';
+import { Database } from '../../../../types/database.types';
 import { UserModel } from '../models/user_model';
 import { ProfileModel } from '../models/profile_model';
 import { AuthSessionEntity } from '../../domain/entities/user_entity';
 import { UpdateProfileParams } from '../../domain/entities/profile_entity';
-import { AuthException, NetworkException, ServerException } from '../../../../core/errors/app_exceptions';
+import { AuthException, ServerException } from '../../../../core/errors/app_exceptions';
 import { logger } from '../../../../core/utils/logger';
 
 export interface IAuthDataSource {
@@ -27,380 +28,299 @@ export interface IAuthDataSource {
 }
 
 export class SupabaseAuthDataSource implements IAuthDataSource {
-  private readonly supabase = supabaseService.getClient();
-
-  async signIn(email: string, password?: string): Promise<AuthSessionEntity> {
-    logger.info('Iniciando autenticación de usuario...', { email });
-
-    if (this.supabase && password) {
-      try {
-        const { data, error } = await this.supabase.auth.signInWithPassword({ email, password });
-        if (error) {
-          logger.warning('Error en autenticación Supabase:', error.message);
-          throw new AuthException('El correo o la contraseña son incorrectos.');
-        }
-
-        if (data.user && data.session) {
-          // Intentar obtener el perfil sincronizado desde public.profiles
-          const profile = await this.getProfile(data.user.id);
-
-          const userModel = UserModel.fromJson({
-            id: data.user.id,
-            email: data.user.email,
-            fullName: profile?.fullName || data.user.user_metadata?.full_name || email.split('@')[0],
-            phone: profile?.phone || data.user.user_metadata?.phone,
-            avatarUrl: profile?.avatarUrl || data.user.user_metadata?.avatar_url,
-            role: profile?.role || 'owner',
-            createdAt: data.user.created_at,
-          });
-
-          const session: AuthSessionEntity = {
-            user: userModel,
-            token: data.session.access_token,
-            expiresAt: data.session.expires_at,
-          };
-
-          this.saveLocalSession(session);
-          return session;
-        }
-      } catch (err: any) {
-        if (err instanceof AuthException) throw err;
-        logger.warning('Fallback a sesión local tras intento en Supabase');
-      }
-    }
-
-    // Demo/Offline Fallback
-    const demoUser = UserModel.fromJson({
-      id: 'usr-001',
-      email: email,
-      fullName: email.includes('admin') ? 'Super Administrador' : 'Enrique Bauza',
-      phone: '+51 987 654 321',
-      role: email.includes('admin') ? 'super_admin' : 'owner',
-      createdAt: new Date().toISOString(),
-      avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-    });
-
-    const session: AuthSessionEntity = {
-      user: demoUser,
-      token: `demo-jwt-${Date.now()}`,
-    };
-
-    this.saveLocalSession(session);
-    return session;
+  private get supabase() {
+    return supabaseService.getClient();
   }
 
-  async signUp(email: string, password?: string, fullName?: string, phone?: string): Promise<AuthSessionEntity> {
-    logger.info('Registrando nuevo usuario...', { email });
+  private ensureClient() {
+    const client = this.supabase;
+    if (!client) {
+      throw new AuthException(
+        'Supabase no está configurado. Por favor define las variables VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY.'
+      );
+    }
+    return client;
+  }
 
-    if (this.supabase && password) {
-      try {
-        const { data, error } = await this.supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: { full_name: fullName, phone },
-          },
-        });
+  async signIn(email: string, password?: string): Promise<AuthSessionEntity> {
+    logger.info('Iniciando autenticación con Supabase Auth...', { email });
 
-        if (error) {
-          logger.warning('Error en registro de Supabase:', error.message);
-          throw new AuthException('No fue posible crear la cuenta. Verifica los datos ingresados.');
-        }
+    const client = this.ensureClient();
 
-        if (data.user) {
-          const userModel = UserModel.fromJson({
-            id: data.user.id,
-            email: data.user.email,
-            fullName: fullName || email.split('@')[0],
-            phone,
-            role: 'owner',
-            createdAt: data.user.created_at,
-          });
-
-          const session: AuthSessionEntity = {
-            user: userModel,
-            token: data.session?.access_token || `token-${Date.now()}`,
-          };
-
-          this.saveLocalSession(session);
-          return session;
-        }
-      } catch (err: any) {
-        if (err instanceof AuthException) throw err;
-        logger.warning('Fallback a registro local');
-      }
+    if (!password) {
+      throw new AuthException('Debes ingresar tu contraseña.');
     }
 
-    const newUser = UserModel.fromJson({
-      id: `usr-${Date.now()}`,
-      email,
-      fullName: fullName || 'Usuario Negocio Flex',
-      phone: phone || '',
-      role: 'owner',
-      createdAt: new Date().toISOString(),
-      avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+    const { data, error } = await client.auth.signInWithPassword({
+      email: email.trim(),
+      password,
     });
 
-    const session: AuthSessionEntity = {
-      user: newUser,
-      token: `demo-token-${Date.now()}`,
-    };
+    if (error) {
+      logger.warning('Error en autenticación Supabase:', error.message);
+      // Mensajes de error legibles y amigables
+      if (error.message.toLowerCase().includes('invalid login credentials')) {
+        throw new AuthException('El correo o la contraseña son incorrectos.');
+      }
+      if (error.message.toLowerCase().includes('email not confirmed')) {
+        throw new AuthException('Por favor confirma tu correo electrónico antes de iniciar sesión.');
+      }
+      throw new AuthException(error.message || 'Error al iniciar sesión.');
+    }
 
-    this.saveLocalSession(session);
-    return session;
+    if (!data.user || !data.session) {
+      throw new AuthException('No se pudo establecer la sesión.');
+    }
+
+    const profile = await this.getProfile(data.user.id);
+
+    const userModel = UserModel.fromJson({
+      id: data.user.id,
+      email: data.user.email,
+      fullName: profile?.fullName || data.user.user_metadata?.full_name || data.user.email?.split('@')[0] || 'Usuario',
+      phone: profile?.phone || data.user.user_metadata?.phone,
+      avatarUrl: profile?.avatarUrl || data.user.user_metadata?.avatar_url,
+      role: profile?.role || (profile?.isSuperAdmin ? 'super_admin' : 'owner'),
+      createdAt: data.user.created_at,
+      isSuperAdmin: profile?.isSuperAdmin || false,
+    });
+
+    return {
+      user: userModel,
+      token: data.session.access_token,
+      expiresAt: data.session.expires_at,
+    };
+  }
+
+  async signUp(
+    email: string,
+    password?: string,
+    fullName?: string,
+    phone?: string
+  ): Promise<AuthSessionEntity> {
+    logger.info('Registrando nuevo usuario en Supabase Auth...', { email });
+
+    const client = this.ensureClient();
+
+    if (!password) {
+      throw new AuthException('Debes ingresar una contraseña de al menos 6 caracteres.');
+    }
+
+    const { data, error } = await client.auth.signUp({
+      email: email.trim(),
+      password,
+      options: {
+        data: {
+          full_name: fullName?.trim() || '',
+          phone: phone?.trim() || '',
+        },
+      },
+    });
+
+    if (error) {
+      logger.warning('Error en registro de Supabase:', error.message);
+      if (error.message.toLowerCase().includes('already registered')) {
+        throw new AuthException('Este correo electrónico ya está registrado.');
+      }
+      throw new AuthException(error.message || 'No fue posible crear la cuenta.');
+    }
+
+    if (!data.user) {
+      throw new AuthException('No fue posible completar el registro.');
+    }
+
+    const userModel = UserModel.fromJson({
+      id: data.user.id,
+      email: data.user.email,
+      fullName: fullName?.trim() || data.user.email?.split('@')[0] || 'Usuario',
+      phone: phone?.trim() || undefined,
+      role: 'owner',
+      createdAt: data.user.created_at,
+      isSuperAdmin: false,
+    });
+
+    return {
+      user: userModel,
+      token: data.session?.access_token || '',
+      expiresAt: data.session?.expires_at,
+    };
   }
 
   async signOut(): Promise<void> {
-    logger.info('Cerrando sesión de usuario');
-    if (this.supabase) {
-      try {
-        await this.supabase.auth.signOut();
-      } catch (err) {
-        logger.warning('Aviso al cerrar sesión en Supabase:', err);
+    logger.info('Cerrando sesión en Supabase Auth');
+    const client = this.supabase;
+    if (client) {
+      const { error } = await client.auth.signOut();
+      if (error) {
+        logger.warning('Aviso al cerrar sesión en Supabase:', error.message);
       }
     }
-    localStorage.removeItem(STORAGE_KEYS.USER_SESSION);
-    localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
   }
 
   async sendPasswordResetEmail(email: string): Promise<void> {
-    logger.info('Solicitando reseteo de contraseña...', { email });
-    if (this.supabase) {
-      try {
-        const { error } = await this.supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: window.location.origin + '/update-password',
-        });
-        if (error) {
-          logger.warning('Error en resetPasswordForEmail:', error.message);
-        }
-      } catch (err) {
-        logger.warning('Excepción al solicitar reseteo:', err);
-      }
+    logger.info('Solicitando reseteo de contraseña en Supabase Auth...', { email });
+    const client = this.ensureClient();
+
+    const redirectUrl = typeof window !== 'undefined'
+      ? `${window.location.origin}/update-password`
+      : undefined;
+
+    const { error } = await client.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: redirectUrl,
+    });
+
+    if (error) {
+      logger.warning('Error en resetPasswordForEmail:', error.message);
+      throw new AuthException(error.message || 'No se pudo enviar el correo de recuperación.');
     }
-    // Guardamos referencia local para el flujo guiado de demostración
-    localStorage.setItem(STORAGE_KEYS.PASSWORD_RECOVERY_EMAIL, email);
   }
 
   async updatePassword(newPassword: string): Promise<void> {
-    logger.info('Actualizando contraseña de usuario');
-    if (this.supabase) {
-      try {
-        const { error } = await this.supabase.auth.updateUser({ password: newPassword });
-        if (error) {
-          throw new AuthException('No fue posible actualizar la contraseña. Comprueba tu sesión.');
-        }
-      } catch (err: any) {
-        if (err instanceof AuthException) throw err;
-        logger.warning('Fallback al actualizar contraseña');
-      }
+    logger.info('Actualizando contraseña de usuario en Supabase Auth');
+    const client = this.ensureClient();
+
+    const { error } = await client.auth.updateUser({ password: newPassword });
+    if (error) {
+      logger.warning('Error en updateUser password:', error.message);
+      throw new AuthException(error.message || 'No fue posible actualizar la contraseña.');
     }
-    localStorage.removeItem(STORAGE_KEYS.PASSWORD_RECOVERY_EMAIL);
   }
 
   async getSession(): Promise<AuthSessionEntity | null> {
-    // Si Supabase tiene cliente activo
-    if (this.supabase) {
-      try {
-        const { data } = await this.supabase.auth.getSession();
-        if (data.session?.user) {
-          const user = data.session.user;
-          const profile = await this.getProfile(user.id);
-          const userModel = UserModel.fromJson({
-            id: user.id,
-            email: user.email,
-            fullName: profile?.fullName || user.user_metadata?.full_name || user.email?.split('@')[0],
-            phone: profile?.phone || user.user_metadata?.phone,
-            avatarUrl: profile?.avatarUrl || user.user_metadata?.avatar_url,
-            role: profile?.role || 'owner',
-            createdAt: user.created_at,
-          });
+    const client = this.supabase;
+    if (!client) return null;
 
-          return {
-            user: userModel,
-            token: data.session.access_token,
-            expiresAt: data.session.expires_at,
-          };
-        }
-      } catch {
-        // Fallback a localStorage
-      }
-    }
-
-    const raw = localStorage.getItem(STORAGE_KEYS.USER_SESSION);
-    if (!raw) return null;
     try {
-      const parsed = JSON.parse(raw);
+      const { data, error } = await client.auth.getSession();
+      if (error || !data.session?.user) {
+        return null;
+      }
+
+      const supaUser = data.session.user;
+      const profile = await this.getProfile(supaUser.id);
+
+      const userModel = UserModel.fromJson({
+        id: supaUser.id,
+        email: supaUser.email,
+        fullName: profile?.fullName || supaUser.user_metadata?.full_name || supaUser.email?.split('@')[0] || 'Usuario',
+        phone: profile?.phone || supaUser.user_metadata?.phone,
+        avatarUrl: profile?.avatarUrl || supaUser.user_metadata?.avatar_url,
+        role: profile?.role || (profile?.isSuperAdmin ? 'super_admin' : 'owner'),
+        createdAt: supaUser.created_at,
+        isSuperAdmin: profile?.isSuperAdmin || false,
+      });
+
       return {
-        user: UserModel.fromJson(parsed.user),
-        token: parsed.token || '',
-        expiresAt: parsed.expiresAt,
+        user: userModel,
+        token: data.session.access_token,
+        expiresAt: data.session.expires_at,
       };
-    } catch {
+    } catch (err) {
+      logger.warning('Error al obtener sesión de Supabase:', err);
       return null;
     }
   }
 
   async getUser(): Promise<UserModel | null> {
-    const session = await this.getSession();
-    return session ? (session.user as UserModel) : null;
+    const client = this.supabase;
+    if (!client) return null;
+
+    try {
+      const { data, error } = await client.auth.getUser();
+      if (error || !data.user) return null;
+
+      const profile = await this.getProfile(data.user.id);
+      return UserModel.fromJson({
+        id: data.user.id,
+        email: data.user.email,
+        fullName: profile?.fullName || data.user.user_metadata?.full_name || data.user.email?.split('@')[0] || 'Usuario',
+        phone: profile?.phone || data.user.user_metadata?.phone,
+        avatarUrl: profile?.avatarUrl || data.user.user_metadata?.avatar_url,
+        role: profile?.role || (profile?.isSuperAdmin ? 'super_admin' : 'owner'),
+        createdAt: data.user.created_at,
+        isSuperAdmin: profile?.isSuperAdmin || false,
+      });
+    } catch {
+      return null;
+    }
   }
 
   async getProfile(userId: string): Promise<ProfileModel | null> {
-    if (this.supabase) {
-      try {
-        const { data, error } = await this.supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', userId)
-          .single();
+    const client = this.supabase;
+    if (!client || !userId) return null;
 
-        if (!error && data) {
-          return ProfileModel.fromJson(data);
-        }
-      } catch (err) {
-        logger.warning('Aviso al consultar tabla profiles:', err);
+    try {
+      const { data, error } = await client
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (error || !data) {
+        return null;
       }
-    }
 
-    // Retornar perfil desde almacenamiento local
-    const session = await this.getSession();
-    if (session && session.user.id === userId) {
-      return ProfileModel.fromJson({
-        id: session.user.id,
-        full_name: session.user.fullName,
-        email: session.user.email,
-        phone: session.user.phone,
-        avatar_url: session.user.avatarUrl,
-        role: session.user.role,
-        created_at: session.user.createdAt,
-      });
+      return ProfileModel.fromJson(data);
+    } catch (err) {
+      logger.warning('Aviso al consultar tabla profiles:', err);
+      return null;
     }
-
-    return null;
   }
 
   async updateProfile(userId: string, updates: UpdateProfileParams): Promise<ProfileModel> {
-    logger.info('Actualizando perfil de usuario...', { userId });
+    logger.info('Actualizando perfil de usuario en Supabase...', { userId });
+    const client = this.ensureClient();
 
-    if (this.supabase) {
-      try {
-        const payload: Record<string, any> = {
-          updated_at: new Date().toISOString(),
-        };
-        if (updates.fullName !== undefined) payload.full_name = updates.fullName;
-        if (updates.phone !== undefined) payload.phone = updates.phone;
-        if (updates.avatarUrl !== undefined) payload.avatar_url = updates.avatarUrl;
+    const payload: Database['public']['Tables']['profiles']['Update'] = {
+      updated_at: new Date().toISOString(),
+    };
+    if (updates.fullName !== undefined) payload.full_name = updates.fullName.trim();
+    if (updates.phone !== undefined) payload.phone = updates.phone ? updates.phone.trim() : null;
+    if (updates.avatarUrl !== undefined) payload.avatar_url = updates.avatarUrl;
 
-        const { data, error } = await this.supabase
-          .from('profiles')
-          .update(payload)
-          .eq('id', userId)
-          .select()
-          .single();
+    const { data, error } = await client
+      .from('profiles')
+      .update(payload)
+      .eq('id', userId)
+      .select()
+      .single();
 
-        if (error) {
-          throw new ServerException('No se pudo guardar la actualización en la base de datos.');
-        }
-
-        if (data) {
-          const updatedProfile = ProfileModel.fromJson(data);
-          this.syncLocalUserProfile(updatedProfile);
-          return updatedProfile;
-        }
-      } catch (err: any) {
-        if (err instanceof ServerException) throw err;
-        logger.warning('Fallback a guardado local de perfil');
-      }
+    if (error || !data) {
+      logger.error('Error al actualizar perfil en PostgreSQL:', error);
+      throw new ServerException(error?.message || 'No se pudo guardar la actualización en la base de datos.');
     }
 
-    // Actualización local resiliente
-    const currentSession = await this.getSession();
-    const existing = currentSession?.user;
-
-    const updatedProfile = ProfileModel.fromJson({
-      id: userId,
-      full_name: updates.fullName !== undefined ? updates.fullName : existing?.fullName || 'Usuario',
-      email: existing?.email,
-      phone: updates.phone !== undefined ? updates.phone : existing?.phone,
-      avatar_url: updates.avatarUrl !== undefined ? updates.avatarUrl : existing?.avatarUrl,
-      role: existing?.role || 'owner',
-      created_at: existing?.createdAt || new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
-
-    this.syncLocalUserProfile(updatedProfile);
-    return updatedProfile;
+    return ProfileModel.fromJson(data);
   }
 
   async uploadAvatar(userId: string, file: File): Promise<string> {
-    logger.info('Subiendo avatar de usuario...', { userId, name: file.name, size: file.size });
+    logger.info('Subiendo avatar a Supabase Storage...', { userId, name: file.name, size: file.size });
+    const client = this.ensureClient();
 
-    if (this.supabase) {
-      try {
-        const fileExt = file.name.split('.').pop() || 'jpg';
-        const fileName = `${userId}/${Date.now()}.${fileExt}`;
-        const filePath = `${fileName}`;
+    const fileExt = file.name.split('.').pop() || 'jpg';
+    const filePath = `${userId}/${Date.now()}.${fileExt}`;
 
-        const { error: uploadError } = await this.supabase.storage
-          .from(STORAGE_BUCKETS.AVATARS)
-          .upload(filePath, file, {
-            upsert: true,
-            contentType: file.type,
-          });
+    const { error: uploadError } = await client.storage
+      .from(STORAGE_BUCKETS.AVATARS)
+      .upload(filePath, file, {
+        upsert: true,
+        contentType: file.type,
+      });
 
-        if (uploadError) {
-          logger.warning('Error al subir a Supabase Storage:', uploadError.message);
-          throw new ServerException('No fue posible subir la imagen al servidor.');
-        }
-
-        const { data } = this.supabase.storage
-          .from(STORAGE_BUCKETS.AVATARS)
-          .getPublicUrl(filePath);
-
-        if (data?.publicUrl) {
-          return data.publicUrl;
-        }
-      } catch (err: any) {
-        if (err instanceof ServerException) throw err;
-        logger.warning('Fallback a procesamiento local de imagen.');
-      }
+    if (uploadError) {
+      logger.error('Error al subir a Supabase Storage:', uploadError.message);
+      throw new ServerException(uploadError.message || 'No fue posible subir la imagen al servidor.');
     }
 
-    // Conversión a DataURL local offline
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => reject(new ServerException('Error al procesar la imagen seleccionada.'));
-      reader.readAsDataURL(file);
-    });
-  }
+    const { data } = client.storage
+      .from(STORAGE_BUCKETS.AVATARS)
+      .getPublicUrl(filePath);
 
-  private syncLocalUserProfile(profile: ProfileModel): void {
-    const raw = localStorage.getItem(STORAGE_KEYS.USER_SESSION);
-    if (!raw) return;
-    try {
-      const session = JSON.parse(raw);
-      session.user.fullName = profile.fullName;
-      session.user.full_name = profile.fullName;
-      session.user.phone = profile.phone;
-      session.user.avatarUrl = profile.avatarUrl;
-      session.user.avatar_url = profile.avatarUrl;
-      session.user.role = profile.role;
-      localStorage.setItem(STORAGE_KEYS.USER_SESSION, JSON.stringify(session));
-    } catch {
-      // Ignore
+    if (!data?.publicUrl) {
+      throw new ServerException('No se pudo obtener la URL pública de la imagen.');
     }
-  }
 
-  private saveLocalSession(session: AuthSessionEntity): void {
-    localStorage.setItem(
-      STORAGE_KEYS.USER_SESSION,
-      JSON.stringify({
-        user: (session.user as UserModel).toJson ? (session.user as UserModel).toJson() : session.user,
-        token: session.token,
-        expiresAt: session.expiresAt,
-      })
-    );
-    localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, session.token);
+    return data.publicUrl;
   }
 }
+

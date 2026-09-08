@@ -1,11 +1,14 @@
 /**
- * Negocio Flex - Organization Datasource (Fase 4)
- * Conecta con Supabase (RLS & RPCs) o gestiona el almacenamiento local multi-tenant resiliente.
+ * Negocio Flex - Organization Datasource (Fase 3 & 4)
+ * Integración Real con Supabase / PostgreSQL con RLS y RPCs.
+ * Fuente única de verdad: Base de datos Supabase / PostgreSQL.
  */
 
 import { supabaseService } from '../../../../core/network/supabase_client';
+import { Database } from '../../../../types/database.types';
 import { OrganizationModel } from '../models/organization_model';
 import { OrganizationMemberModel } from '../models/organization_member_model';
+import { OrganizationSettingsModel } from '../models/organization_settings_model';
 import {
   CreateOrganizationParams,
 } from '../../domain/repositories/organization_repository';
@@ -14,607 +17,403 @@ import {
   OrganizationMemberEntity,
   OrganizationSettingsEntity,
   OrganizationRole,
-  BusinessType,
 } from '../../domain/entities/organization_entity';
+import { PublicBusinessData } from '../../domain/entities/public_business_entity';
+import {
+  INITIAL_ORGANIZATIONS,
+  INITIAL_CATEGORIES,
+  INITIAL_PRODUCTS,
+  INITIAL_SERVICES,
+  INITIAL_BUSINESS_HOURS,
+  INITIAL_GALLERY_ITEMS
+} from '../../../../core/data/initialData';
+import {
+  Organization,
+  OrganizationSettings,
+  Category,
+  Product,
+  ServiceItem,
+  GalleryItem,
+  BusinessHour
+} from '../../../../types';
 import { SlugValidator } from '../../../../core/validators/slug_validator';
 import {
-  ValidationException,
   UnauthorizedException,
   ForbiddenException,
   NotFoundException,
 } from '../../../../core/errors/app_exceptions';
 import { logger } from '../../../../core/utils/logger';
 
-// Datos iniciales de demostración multi-tenant con membresías
-const SEED_ORGS: any[] = [
-  {
-    id: 'org-restaurante-01',
-    name: 'Restaurante El Sabor',
-    slug: 'restaurante-el-sabor',
-    business_type: 'restaurant',
-    status: 'active',
-    created_by: 'usr-001',
-    created_at: new Date(Date.now() - 86400000 * 30).toISOString(),
-    description: 'Comida criolla, pescados y mariscos con la mejor sazón tradicional.',
-    phone: '+51 987 654 321',
-    email: 'contacto@elsabor.pe',
-    address: 'Av. Larco 450, Miraflores, Lima',
-    currency: 'S/',
-    branding: {
-      primary_color: '#E11D48',
-      secondary_color: '#F59E0B',
-      slogan: 'El verdadero sabor peruano en cada plato',
-      logo_url: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=150',
-    },
-    modules: {
-      enable_products: true,
-      enable_services: false,
-      enable_appointments: false,
-      enable_inventory: true,
-      enable_orders: true,
-      enable_whatsapp_checkout: true,
-      enable_staff_management: true,
-      enable_reviews: true,
-    },
-  },
-  {
-    id: 'org-salon-02',
-    name: 'Peluquería Glamour',
-    slug: 'peluqueria-glamour',
-    business_type: 'salon',
-    status: 'active',
-    created_by: 'usr-001',
-    created_at: new Date(Date.now() - 86400000 * 20).toISOString(),
-    description: 'Estilismo profesional, tintes, spa capilar y tratamientos de belleza.',
-    phone: '+51 912 345 678',
-    email: 'citas@glamour.pe',
-    address: 'Calle San Martín 120, Lima',
-    currency: 'S/',
-    branding: {
-      primary_color: '#9333EA',
-      secondary_color: '#EC4899',
-      slogan: 'Realzamos tu belleza natural',
-      logo_url: 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=150',
-    },
-    modules: {
-      enable_products: true,
-      enable_services: true,
-      enable_appointments: true,
-      enable_inventory: true,
-      enable_orders: true,
-      enable_whatsapp_checkout: true,
-      enable_staff_management: true,
-      enable_reviews: true,
-    },
-  },
-  {
-    id: 'org-gym-03',
-    name: 'Gimnasio Power',
-    slug: 'gimnasio-power',
-    business_type: 'gym',
-    status: 'active',
-    created_by: 'usr-002', // Creado por otro usuario (usr-002) donde usr-001 es solo STAFF
-    created_at: new Date(Date.now() - 86400000 * 10).toISOString(),
-    description: 'Área de pesas, entrenamiento funcional, cardio y asesoría nutricional.',
-    phone: '+51 998 877 665',
-    email: 'info@powergym.pe',
-    address: 'Av. Arequipa 2300, Lima',
-    currency: 'S/',
-    branding: {
-      primary_color: '#0284C7',
-      secondary_color: '#10B981',
-      slogan: 'Fuerza, constancia y resultados',
-      logo_url: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=150',
-    },
-    modules: {
-      enable_products: true,
-      enable_services: true,
-      enable_appointments: true,
-      enable_inventory: true,
-      enable_orders: false,
-      enable_whatsapp_checkout: true,
-      enable_staff_management: true,
-      enable_reviews: true,
-    },
-  },
-];
-
-const SEED_MEMBERS: any[] = [
-  // Usuario usr-001 es OWNER de 'Restaurante El Sabor'
-  {
-    id: 'mem-001',
-    organization_id: 'org-restaurante-01',
-    user_id: 'usr-001',
-    role: 'owner',
-    status: 'active',
-    user_full_name: 'Demo Administrador',
-    user_email: 'enriquebauza1@gmail.com',
-    created_at: new Date(Date.now() - 86400000 * 30).toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'mem-002',
-    organization_id: 'org-restaurante-01',
-    user_id: 'usr-003',
-    role: 'staff',
-    status: 'active',
-    user_full_name: 'Carlos Mesero',
-    user_email: 'carlos@elsabor.pe',
-    created_at: new Date(Date.now() - 86400000 * 25).toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  // Usuario usr-001 es OWNER de 'Peluquería Glamour'
-  {
-    id: 'mem-003',
-    organization_id: 'org-salon-02',
-    user_id: 'usr-001',
-    role: 'owner',
-    status: 'active',
-    user_full_name: 'Demo Administrador',
-    user_email: 'enriquebauza1@gmail.com',
-    created_at: new Date(Date.now() - 86400000 * 20).toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'mem-004',
-    organization_id: 'org-salon-02',
-    user_id: 'usr-004',
-    role: 'admin',
-    status: 'active',
-    user_full_name: 'Lucía Estilista Principal',
-    user_email: 'lucia@glamour.pe',
-    created_at: new Date(Date.now() - 86400000 * 15).toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  // Usuario usr-001 es STAFF de 'Gimnasio Power' (Multi-Tenant demonstration)
-  {
-    id: 'mem-005',
-    organization_id: 'org-gym-03',
-    user_id: 'usr-002',
-    role: 'owner',
-    status: 'active',
-    user_full_name: 'Marcos Entrenador',
-    user_email: 'marcos@powergym.pe',
-    created_at: new Date(Date.now() - 86400000 * 10).toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'mem-006',
-    organization_id: 'org-gym-03',
-    user_id: 'usr-001',
-    role: 'staff',
-    status: 'active',
-    user_full_name: 'Demo Administrador',
-    user_email: 'enriquebauza1@gmail.com',
-    created_at: new Date(Date.now() - 86400000 * 5).toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-];
-
-const SEED_SETTINGS: any[] = [
-  {
-    id: 'set-001',
-    organization_id: 'org-restaurante-01',
-    settings: { language: 'es', timezone: 'America/Lima', currency: 'PEN' },
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'set-002',
-    organization_id: 'org-salon-02',
-    settings: { language: 'es', timezone: 'America/Lima', currency: 'PEN' },
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'set-003',
-    organization_id: 'org-gym-03',
-    settings: { language: 'es', timezone: 'America/Lima', currency: 'PEN' },
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-];
-
 export class OrganizationDataSource {
-  private readonly supabase = supabaseService.getClient();
-  private readonly storageOrgsKey = 'negocio_flex_organizations_v4';
-  private readonly storageMembersKey = 'negocio_flex_organization_members_v4';
-  private readonly storageSettingsKey = 'negocio_flex_organization_settings_v4';
-
-  constructor() {
-    this.initializeLocalStorage();
-  }
-
-  private initializeLocalStorage(): void {
-    if (typeof window === 'undefined') return;
-
-    if (!localStorage.getItem(this.storageOrgsKey)) {
-      localStorage.setItem(this.storageOrgsKey, JSON.stringify(SEED_ORGS));
+  private getClient() {
+    const client = supabaseService.getClient();
+    if (!client) {
+      throw new UnauthorizedException('Cliente de Supabase no inicializado');
     }
-    if (!localStorage.getItem(this.storageMembersKey)) {
-      localStorage.setItem(this.storageMembersKey, JSON.stringify(SEED_MEMBERS));
-    }
-    if (!localStorage.getItem(this.storageSettingsKey)) {
-      localStorage.setItem(this.storageSettingsKey, JSON.stringify(SEED_SETTINGS));
-    }
-  }
-
-  // --- Local Storage Helpers ---
-  private getLocalOrgs(): any[] {
-    const raw = localStorage.getItem(this.storageOrgsKey);
-    return raw ? JSON.parse(raw) : SEED_ORGS;
-  }
-
-  private saveLocalOrgs(orgs: any[]): void {
-    localStorage.setItem(this.storageOrgsKey, JSON.stringify(orgs));
-  }
-
-  private getLocalMembers(): any[] {
-    const raw = localStorage.getItem(this.storageMembersKey);
-    return raw ? JSON.parse(raw) : SEED_MEMBERS;
-  }
-
-  private saveLocalMembers(members: any[]): void {
-    localStorage.setItem(this.storageMembersKey, JSON.stringify(members));
-  }
-
-  private getLocalSettings(): any[] {
-    const raw = localStorage.getItem(this.storageSettingsKey);
-    return raw ? JSON.parse(raw) : SEED_SETTINGS;
-  }
-
-  private saveLocalSettings(settings: any[]): void {
-    localStorage.setItem(this.storageSettingsKey, JSON.stringify(settings));
+    return client;
   }
 
   // --- Multi-Tenant Queries ---
 
   /**
    * Obtiene las organizaciones autorizadas para el usuario autenticado (donde status = active)
+   * Consulta directamente Supabase PostgreSQL con joins a organization_members y organization_settings.
    */
   async fetchUserOrganizations(userId: string): Promise<OrganizationModel[]> {
-    logger.info('Consultando organizaciones multi-tenant autorizadas...', { userId });
+    logger.info('Consultando organizaciones multi-tenant autorizadas en Supabase...', { userId });
 
-    // 1. Supabase con RLS
-    if (this.supabase) {
-      try {
-        const { data, error } = await this.supabase
-          .from('organizations')
-          .select(`
-            *,
-            organization_members!inner (
-              role,
-              status,
-              user_id
-            ),
-            organization_settings (
-              id,
-              settings,
-              created_at,
-              updated_at
-            )
-          `)
-          .eq('organization_members.user_id', userId)
-          .eq('organization_members.status', 'active');
+    const client = this.getClient();
 
-        if (!error && data) {
-          return data.map(row => {
-            const memberInfo = Array.isArray(row.organization_members)
-              ? row.organization_members[0]
-              : row.organization_members;
-            const settingsInfo = Array.isArray(row.organization_settings)
-              ? row.organization_settings[0]
-              : row.organization_settings;
+    const { data, error } = await client
+      .from('organizations')
+      .select(`
+        *,
+        organization_members!inner (
+          role,
+          status,
+          user_id
+        ),
+        organization_settings (
+          id,
+          organization_id,
+          logo_url,
+          cover_url,
+          primary_color,
+          secondary_color,
+          accent_color,
+          text_color,
+          address,
+          phone,
+          whatsapp_number,
+          whatsapp_message,
+          email,
+          instagram_url,
+          facebook_url,
+          tiktok_url,
+          youtube_url,
+          website_url,
+          currency,
+          slogan,
+          active_modules,
+          created_at,
+          updated_at
+        )
+      `)
+      .eq('organization_members.user_id', userId)
+      .eq('organization_members.status', 'active');
 
-            return OrganizationModel.fromJson({
-              ...row,
-              currentUserRole: memberInfo?.role || 'staff',
-              settings: settingsInfo ? {
-                id: settingsInfo.id,
-                language: settingsInfo.settings?.language || 'es',
-                timezone: settingsInfo.settings?.timezone || 'America/Lima',
-                currency: settingsInfo.settings?.currency || 'PEN',
-                createdAt: settingsInfo.created_at,
-                updatedAt: settingsInfo.updated_at,
-              } : undefined,
-            });
-          });
-        }
-      } catch (err) {
-        logger.warning('Fallback a datos de organización locales.');
-      }
+    if (error) {
+      logger.error('Error al consultar organizaciones en Supabase:', error);
+      throw new Error(`Error al consultar organizaciones: ${error.message}`);
     }
 
-    // 2. Local Storage Resiliente
-    const allMembers = this.getLocalMembers();
-    const allOrgs = this.getLocalOrgs();
-    const allSettings = this.getLocalSettings();
+    if (!data || data.length === 0) {
+      return [];
+    }
 
-    // Encontrar membresías activas del usuario (o fallback para usr-001 si es demo)
-    const userMemberships = allMembers.filter(
-      m => (m.user_id === userId || (userId.startsWith('usr-') && m.user_id === 'usr-001')) && m.status === 'active'
-    );
+    return data.map((row: any) => {
+      const memberInfo = Array.isArray(row.organization_members)
+        ? row.organization_members.find((m: any) => m.user_id === userId) || row.organization_members[0]
+        : row.organization_members;
+      const settingsInfo = Array.isArray(row.organization_settings)
+        ? row.organization_settings[0]
+        : row.organization_settings;
 
-    const userOrgIds = new Set(userMemberships.map(m => m.organization_id));
-
-    const authorizedOrgs = allOrgs
-      .filter(o => userOrgIds.has(o.id) && o.status === 'active')
-      .map(o => {
-        const membership = userMemberships.find(m => m.organization_id === o.id);
-        const orgSetting = allSettings.find(s => s.organization_id === o.id);
-        const orgMemberCount = allMembers.filter(m => m.organization_id === o.id && m.status === 'active').length;
-
-        return OrganizationModel.fromJson({
-          ...o,
-          currentUserRole: membership?.role || 'staff',
-          memberCount: orgMemberCount,
-          settings: orgSetting ? {
-            id: orgSetting.id,
-            organization_id: o.id,
-            language: orgSetting.settings?.language || 'es',
-            timezone: orgSetting.settings?.timezone || 'America/Lima',
-            currency: orgSetting.settings?.currency || 'PEN',
-            created_at: orgSetting.created_at,
-            updated_at: orgSetting.updated_at,
-          } : undefined,
-        });
+      return OrganizationModel.fromJson({
+        ...row,
+        currentUserRole: memberInfo?.role || 'staff',
+        organization_settings: settingsInfo,
       });
-
-    return authorizedOrgs;
+    });
   }
 
   /**
    * Obtiene una organización específica verificando que el usuario tenga membresía activa
    */
   async fetchOrganizationById(id: string, userId: string): Promise<OrganizationModel | null> {
-    const orgs = await this.fetchUserOrganizations(userId);
-    return orgs.find(o => o.id === id) || null;
-  }
+    const client = this.getClient();
 
-  /**
-   * Busca por slug (solo accesible si pertenece a la organización o es público)
-   */
-  async fetchOrganizationBySlug(slug: string): Promise<OrganizationModel | null> {
-    if (this.supabase) {
-      try {
-        const { data, error } = await this.supabase
-          .from('organizations')
-          .select('*')
-          .eq('slug', slug)
-          .single();
+    const { data, error } = await client
+      .from('organizations')
+      .select(`
+        *,
+        organization_members (
+          role,
+          status,
+          user_id
+        ),
+        organization_settings (
+          id,
+          organization_id,
+          logo_url,
+          cover_url,
+          primary_color,
+          secondary_color,
+          accent_color,
+          text_color,
+          address,
+          phone,
+          whatsapp_number,
+          whatsapp_message,
+          email,
+          instagram_url,
+          facebook_url,
+          tiktok_url,
+          youtube_url,
+          website_url,
+          currency,
+          slogan,
+          active_modules,
+          created_at,
+          updated_at
+        )
+      `)
+      .eq('id', id)
+      .maybeSingle();
 
-        if (!error && data) {
-          return OrganizationModel.fromJson(data);
-        }
-      } catch (err) {
-        logger.warning('Fallback a datos de organización locales.');
-      }
+    if (error) {
+      logger.error('Error al consultar organización por ID en Supabase:', error);
+      throw new Error(`Error al obtener negocio: ${error.message}`);
     }
 
-    const orgs = this.getLocalOrgs();
-    const found = orgs.find(o => o.slug === slug);
-    return found ? OrganizationModel.fromJson(found) : null;
-  }
+    if (!data) return null;
 
-  /**
-   * Creación Atómica Transaccional:
-   * 1. Crea Organization
-   * 2. Crea Organization Member como OWNER
-   * 3. Crea Organization Settings con defaults
-   */
-  async createOrganization(params: CreateOrganizationParams, creatorUserId: string): Promise<OrganizationModel> {
-    logger.info('Iniciando creación transaccional de organización...', { name: params.name, creatorUserId });
-
-    const normalizedSlug = params.slug ? SlugValidator.normalize(params.slug) : SlugValidator.normalize(params.name);
-
-    // 1. Supabase RPC 'create_organization'
-    if (this.supabase) {
-      try {
-        const { data, error } = await this.supabase.rpc('create_organization', {
-          org_name: params.name.trim(),
-          org_business_type: params.businessType,
-          custom_slug: normalizedSlug,
-        });
-
-        if (!error && data) {
-          logger.info('Organización creada exitosamente en Supabase:', data);
-          return OrganizationModel.fromJson(data);
-        }
-      } catch (err) {
-        logger.warning('Fallo RPC Supabase, ejecutando en almacenamiento local seguro.', err);
-      }
-    }
-
-    // 2. Almacenamiento Local Transaccional
-    const allOrgs = this.getLocalOrgs();
-    const allMembers = this.getLocalMembers();
-    const allSettings = this.getLocalSettings();
-
-    // Resolver slug único incrementalmente si colisiona
-    let uniqueSlug = normalizedSlug;
-    let counter = 1;
-    while (allOrgs.some(o => o.slug === uniqueSlug)) {
-      counter++;
-      uniqueSlug = `${normalizedSlug}-${counter}`;
-    }
-
-    const newOrgId = `org-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-    const nowIso = new Date().toISOString();
-
-    const newOrgData = {
-      id: newOrgId,
-      name: params.name.trim(),
-      slug: uniqueSlug,
-      business_type: params.businessType,
-      status: 'active',
-      created_by: creatorUserId,
-      created_at: nowIso,
-      updated_at: nowIso,
-      description: params.description || '',
-      phone: params.phone || '',
-      currency: 'S/',
-      branding: {
-        primary_color: params.primaryColor || '#4F46E5',
-        secondary_color: '#0D9488',
-        logo_url: 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?w=150',
-        slogan: 'Calidad y servicio garantizado',
-      },
-      modules: {
-        enable_products: true,
-        enable_services: true,
-        enable_appointments: params.businessType === 'salon' || params.businessType === 'barberia' || params.businessType === 'veterinaria',
-        enable_inventory: true,
-        enable_orders: true,
-        enable_whatsapp_checkout: true,
-        enable_staff_management: true,
-        enable_reviews: true,
-      },
-    };
-
-    const newMemberData = {
-      id: `mem-${Date.now()}`,
-      organization_id: newOrgId,
-      user_id: creatorUserId,
-      role: 'owner',
-      status: 'active',
-      user_full_name: 'Propietario',
-      user_email: 'owner@negocioflex.pe',
-      created_at: nowIso,
-      updated_at: nowIso,
-    };
-
-    const newSettingsData = {
-      id: `set-${Date.now()}`,
-      organization_id: newOrgId,
-      settings: {
-        language: 'es',
-        timezone: 'America/Lima',
-        currency: 'PEN',
-      },
-      created_at: nowIso,
-      updated_at: nowIso,
-    };
-
-    // Commit atómico local
-    this.saveLocalOrgs([newOrgData, ...allOrgs]);
-    this.saveLocalMembers([newMemberData, ...allMembers]);
-    this.saveLocalSettings([newSettingsData, ...allSettings]);
-
-    logger.info('Organización creada y propietario asignado exitosamente (Local).');
+    const rawMembers = Array.isArray(data.organization_members) ? data.organization_members : [];
+    const memberInfo = rawMembers.find((m: any) => m.user_id === userId);
+    const settingsInfo = Array.isArray(data.organization_settings)
+      ? data.organization_settings[0]
+      : data.organization_settings;
 
     return OrganizationModel.fromJson({
-      ...newOrgData,
-      currentUserRole: 'owner',
-      memberCount: 1,
+      ...data,
+      currentUserRole: memberInfo?.role || 'staff',
+      memberCount: rawMembers.filter((m: any) => m.status === 'active').length || 1,
+      organization_settings: settingsInfo,
     });
   }
 
   /**
-   * Actualiza los datos de la organización con verificación de permisos (OWNER / ADMIN)
+   * Busca por slug (accesible públicamente si is_active = true o si el usuario es miembro)
+   */
+  async fetchOrganizationBySlug(slug: string): Promise<OrganizationModel | null> {
+    const client = this.getClient();
+
+    const { data, error } = await client
+      .from('organizations')
+      .select(`
+        *,
+        organization_settings (
+          id,
+          organization_id,
+          logo_url,
+          cover_url,
+          primary_color,
+          secondary_color,
+          accent_color,
+          text_color,
+          address,
+          phone,
+          whatsapp_number,
+          whatsapp_message,
+          email,
+          instagram_url,
+          facebook_url,
+          tiktok_url,
+          youtube_url,
+          website_url,
+          currency,
+          slogan,
+          active_modules,
+          created_at,
+          updated_at
+        )
+      `)
+      .eq('slug', slug)
+      .maybeSingle();
+
+    if (error) {
+      logger.error('Error al consultar organización por slug en Supabase:', error);
+      throw new Error(`Error al buscar negocio por catálogo: ${error.message}`);
+    }
+
+    if (!data) return null;
+
+    const settingsInfo = Array.isArray(data.organization_settings)
+      ? data.organization_settings[0]
+      : data.organization_settings;
+
+    return OrganizationModel.fromJson({
+      ...data,
+      organization_settings: settingsInfo,
+    });
+  }
+
+  /**
+   * Creación Atómica Transaccional:
+   * Invoca el RPC `create_organization` de Supabase PostgreSQL con RLS y SECURITY DEFINER.
+   */
+  async createOrganization(params: CreateOrganizationParams, creatorUserId: string): Promise<OrganizationModel> {
+    logger.info('Iniciando creación transaccional de organización en Supabase...', { name: params.name, creatorUserId });
+
+    const client = this.getClient();
+    const normalizedSlug = params.slug ? SlugValidator.normalize(params.slug) : SlugValidator.normalize(params.name);
+
+    // 1. Invocar RPC atómico
+    const { data, error } = await client.rpc('create_organization', {
+      org_name: params.name.trim(),
+      org_business_type: params.businessType,
+      custom_slug: normalizedSlug,
+    });
+
+    if (error) {
+      logger.error('Error al ejecutar RPC create_organization en Supabase:', error);
+      throw new Error(`No fue posible crear la organización: ${error.message}`);
+    }
+
+    const createdPayload = (typeof data === 'string' ? JSON.parse(data) : data) as any;
+    const orgId = createdPayload?.id;
+
+    if (!orgId) {
+      throw new Error('Respuesta inválida de creación de organización en Supabase');
+    }
+
+    // 2. Si se especificaron datos adicionales de configuración (teléfono, branding, descripción), actualizamos
+    if (params.description || params.phone || params.primaryColor) {
+      if (params.description) {
+        await client
+          .from('organizations')
+          .update({ description: params.description, updated_at: new Date().toISOString() })
+          .eq('id', orgId);
+      }
+
+      const settingsUpdate: Database['public']['Tables']['organization_settings']['Update'] = {
+        updated_at: new Date().toISOString(),
+      };
+      if (params.phone) settingsUpdate.phone = params.phone;
+      if (params.primaryColor) settingsUpdate.primary_color = params.primaryColor;
+
+      await client
+        .from('organization_settings')
+        .update(settingsUpdate)
+        .eq('organization_id', orgId);
+    }
+
+    // 3. Consultar y retornar la entidad completa recién creada
+    const completeOrg = await this.fetchOrganizationById(orgId, creatorUserId);
+    if (!completeOrg) {
+      return OrganizationModel.fromJson({
+        ...createdPayload,
+        currentUserRole: 'owner',
+        memberCount: 1,
+      });
+    }
+
+    return completeOrg;
+  }
+
+  /**
+   * Actualiza los datos de la organización con verificación de políticas RLS en Supabase (OWNER / ADMIN)
    */
   async updateOrganization(
     id: string,
     updates: Partial<OrganizationEntity>,
     callerUserId: string
   ): Promise<OrganizationModel> {
-    // 1. Supabase
-    if (this.supabase) {
-      try {
-        const updatePayload: Record<string, any> = {
-          updated_at: new Date().toISOString(),
-        };
-        if (updates.name) updatePayload.name = updates.name;
-        if (updates.businessType) updatePayload.business_type = updates.businessType;
-        if (updates.slug) updatePayload.slug = updates.slug;
+    const client = this.getClient();
 
-        const { data, error } = await this.supabase
-          .from('organizations')
-          .update(updatePayload)
-          .eq('id', id)
-          .select()
-          .single();
-
-        if (!error && data) {
-          return OrganizationModel.fromJson(data);
-        }
-      } catch (err) {
-        logger.warning('Fallback a actualización local');
-      }
-    }
-
-    // 2. Almacenamiento Local
-    const allOrgs = this.getLocalOrgs();
-    const allMembers = this.getLocalMembers();
-
-    // Validar membresía y rol del invocador
-    const membership = allMembers.find(
-      m => m.organization_id === id && (m.user_id === callerUserId || m.user_id === 'usr-001') && m.status === 'active'
-    );
-
-    if (!membership || (membership.role !== 'owner' && membership.role !== 'admin')) {
-      throw new ForbiddenException('No tienes permisos suficientes para modificar este negocio.');
-    }
-
-    const orgIndex = allOrgs.findIndex(o => o.id === id);
-    if (orgIndex === -1) {
-      throw new NotFoundException('Negocio no encontrado');
-    }
-
-    const existing = allOrgs[orgIndex];
-
-    const updatedOrg = {
-      ...existing,
-      name: updates.name || existing.name,
-      business_type: updates.businessType || existing.business_type,
-      slug: updates.slug || existing.slug,
-      description: updates.description !== undefined ? updates.description : existing.description,
-      phone: updates.phone !== undefined ? updates.phone : existing.phone,
+    const updatePayload: Database['public']['Tables']['organizations']['Update'] = {
       updated_at: new Date().toISOString(),
     };
+    if (updates.name !== undefined) updatePayload.name = updates.name.trim();
+    if (updates.businessType !== undefined) updatePayload.business_type = updates.businessType;
+    if (updates.slug !== undefined) updatePayload.slug = SlugValidator.normalize(updates.slug);
+    if (updates.description !== undefined) updatePayload.description = updates.description;
 
-    allOrgs[orgIndex] = updatedOrg;
-    this.saveLocalOrgs(allOrgs);
+    const { data, error } = await client
+      .from('organizations')
+      .update(updatePayload)
+      .eq('id', id)
+      .select(`
+        *,
+        organization_settings (
+          id,
+          organization_id,
+          logo_url,
+          cover_url,
+          primary_color,
+          secondary_color,
+          accent_color,
+          text_color,
+          address,
+          phone,
+          whatsapp_number,
+          whatsapp_message,
+          email,
+          instagram_url,
+          facebook_url,
+          tiktok_url,
+          youtube_url,
+          website_url,
+          currency,
+          slogan,
+          active_modules,
+          created_at,
+          updated_at
+        )
+      `)
+      .single();
 
-    return OrganizationModel.fromJson({
-      ...updatedOrg,
-      currentUserRole: membership.role,
-    });
-  }
-
-  /**
-   * Obtiene la lista de miembros de una organización
-   */
-  async fetchMembers(organizationId: string): Promise<OrganizationMemberModel[]> {
-    if (this.supabase) {
-      try {
-        const { data, error } = await this.supabase
-          .from('organization_members')
-          .select(`
-            *,
-            profiles:user_id (
-              full_name,
-              email,
-              avatar_url
-            )
-          `)
-          .eq('organization_id', organizationId)
-          .order('created_at', { ascending: true });
-
-        if (!error && data) {
-          return data.map(d => OrganizationMemberModel.fromJson(d));
-        }
-      } catch (err) {
-        logger.warning('Fallback a miembros locales');
-      }
+    if (error) {
+      logger.error('Error al actualizar organización en Supabase:', error);
+      throw new Error(`Error al actualizar organización: ${error.message}`);
     }
 
-    const allMembers = this.getLocalMembers();
-    const orgMembers = allMembers.filter(m => m.organization_id === organizationId);
-    return orgMembers.map(m => OrganizationMemberModel.fromJson(m));
+    if (updates.phone !== undefined) {
+      await client
+        .from('organization_settings')
+        .update({ phone: updates.phone, updated_at: new Date().toISOString() })
+        .eq('organization_id', id);
+    }
+
+    return OrganizationModel.fromJson(data);
   }
 
   /**
-   * Cambia el rol de un miembro protegiendo al último OWNER
+   * Obtiene la lista de miembros de una organización desde Supabase con join a profiles
+   */
+  async fetchMembers(organizationId: string): Promise<OrganizationMemberModel[]> {
+    const client = this.getClient();
+
+    const { data, error } = await client
+      .from('organization_members')
+      .select(`
+        id,
+        organization_id,
+        user_id,
+        role,
+        status,
+        permissions,
+        created_at,
+        updated_at,
+        profiles:user_id (
+          full_name,
+          email,
+          avatar_url
+        )
+      `)
+      .eq('organization_id', organizationId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      logger.error('Error al consultar miembros en Supabase:', error);
+      throw new Error(`Error al consultar miembros: ${error.message}`);
+    }
+
+    return (data || []).map((d: any) => OrganizationMemberModel.fromJson(d));
+  }
+
+  /**
+   * Cambia el rol de un miembro protegiendo al último OWNER mediante el RPC seguro de Supabase
    */
   async changeMemberRole(
     organizationId: string,
@@ -622,170 +421,398 @@ export class OrganizationDataSource {
     newRole: OrganizationRole,
     callerUserId: string
   ): Promise<void> {
-    if (this.supabase) {
-      try {
-        const { error } = await this.supabase.rpc('change_member_role', {
-          p_organization_id: organizationId,
-          p_target_user_id: targetUserId,
-          p_new_role: newRole,
-        });
-        if (!error) return;
-      } catch (err) {
-        logger.warning('Fallo RPC change_member_role, aplicando validación local');
-      }
+    const client = this.getClient();
+
+    const { error } = await client.rpc('change_member_role', {
+      p_organization_id: organizationId,
+      p_target_user_id: targetUserId,
+      p_new_role: newRole,
+    });
+
+    if (error) {
+      logger.error('Error al ejecutar RPC change_member_role en Supabase:', error);
+      throw new Error(`Error al cambiar rol del miembro: ${error.message}`);
     }
-
-    const allMembers = this.getLocalMembers();
-    const callerMember = allMembers.find(
-      m => m.organization_id === organizationId && (m.user_id === callerUserId || m.user_id === 'usr-001') && m.status === 'active'
-    );
-
-    if (!callerMember || callerMember.role !== 'owner') {
-      throw new ForbiddenException('Solo los propietarios (OWNER) pueden modificar roles.');
-    }
-
-    // Proteger último OWNER activo
-    const targetMember = allMembers.find(m => m.organization_id === organizationId && m.user_id === targetUserId);
-    if (!targetMember) throw new NotFoundException('Miembro no encontrado');
-
-    if (targetMember.role === 'owner' && newRole !== 'owner') {
-      const activeOwners = allMembers.filter(
-        m => m.organization_id === organizationId && m.role === 'owner' && m.status === 'active'
-      );
-      if (activeOwners.length <= 1) {
-        throw new ValidationException('El negocio debe mantener al menos un propietario (OWNER) activo.');
-      }
-    }
-
-    targetMember.role = newRole;
-    targetMember.updated_at = new Date().toISOString();
-    this.saveLocalMembers(allMembers);
   }
 
   /**
-   * Elimina un miembro con protección contra el último OWNER
+   * Elimina un miembro con protección contra el último OWNER mediante el RPC seguro de Supabase
    */
   async removeMember(organizationId: string, targetUserId: string, callerUserId: string): Promise<void> {
-    if (this.supabase) {
-      try {
-        const { error } = await this.supabase.rpc('remove_organization_member', {
-          p_organization_id: organizationId,
-          p_target_user_id: targetUserId,
-        });
-        if (!error) return;
-      } catch (err) {
-        logger.warning('Fallo RPC remove_organization_member, aplicando validación local');
-      }
+    const client = this.getClient();
+
+    const { error } = await client.rpc('remove_organization_member', {
+      p_organization_id: organizationId,
+      p_target_user_id: targetUserId,
+    });
+
+    if (error) {
+      logger.error('Error al ejecutar RPC remove_organization_member en Supabase:', error);
+      throw new Error(`Error al eliminar miembro: ${error.message}`);
     }
-
-    const allMembers = this.getLocalMembers();
-    const callerMember = allMembers.find(
-      m => m.organization_id === organizationId && (m.user_id === callerUserId || m.user_id === 'usr-001') && m.status === 'active'
-    );
-
-    if (!callerMember || (callerMember.role !== 'owner' && callerUserId !== targetUserId)) {
-      throw new ForbiddenException('No tienes permisos para remover miembros de este negocio.');
-    }
-
-    const targetMember = allMembers.find(m => m.organization_id === organizationId && m.user_id === targetUserId);
-    if (!targetMember) throw new NotFoundException('Miembro no encontrado');
-
-    if (targetMember.role === 'owner') {
-      const activeOwners = allMembers.filter(
-        m => m.organization_id === organizationId && m.role === 'owner' && m.status === 'active'
-      );
-      if (activeOwners.length <= 1) {
-        throw new ValidationException('No puedes eliminar al único propietario (OWNER) de la organización.');
-      }
-    }
-
-    const filtered = allMembers.filter(m => !(m.organization_id === organizationId && m.user_id === targetUserId));
-    this.saveLocalMembers(filtered);
   }
 
   /**
-   * Obtiene la configuración de la organización
+   * Obtiene la configuración de la organización desde la tabla `organization_settings` de Supabase
    */
   async fetchSettings(organizationId: string): Promise<OrganizationSettingsEntity | null> {
-    const allSettings = this.getLocalSettings();
-    const found = allSettings.find(s => s.organization_id === organizationId);
-    if (!found) return null;
+    const client = this.getClient();
 
-    return {
-      id: found.id,
-      organizationId: found.organization_id,
-      language: found.settings?.language || 'es',
-      timezone: found.settings?.timezone || 'America/Lima',
-      currency: found.settings?.currency || 'PEN',
-      dynamicConfig: found.settings,
-      createdAt: found.created_at,
-      updatedAt: found.updated_at,
-    };
+    const { data, error } = await client
+      .from('organization_settings')
+      .select('*')
+      .eq('organization_id', organizationId)
+      .maybeSingle();
+
+    if (error) {
+      logger.error('Error al obtener configuración de organización desde Supabase:', error);
+      throw new Error(`Error al obtener configuración: ${error.message}`);
+    }
+
+    if (!data) return null;
+    return OrganizationSettingsModel.fromJson(data);
   }
 
   /**
-   * Actualiza la configuración de la organización
+   * Actualiza la configuración de la organización en la tabla `organization_settings` de Supabase
    */
   async updateSettings(
     organizationId: string,
     newSettings: Partial<OrganizationSettingsEntity>,
     callerUserId: string
   ): Promise<OrganizationSettingsEntity> {
-    const allSettings = this.getLocalSettings();
-    const allMembers = this.getLocalMembers();
+    const client = this.getClient();
 
-    const callerMember = allMembers.find(
-      m => m.organization_id === organizationId && (m.user_id === callerUserId || m.user_id === 'usr-001') && m.status === 'active'
+    const payload: Database['public']['Tables']['organization_settings']['Update'] = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (newSettings.logoUrl !== undefined) payload.logo_url = newSettings.logoUrl;
+    if (newSettings.coverUrl !== undefined) payload.cover_url = newSettings.coverUrl;
+    if (newSettings.primaryColor !== undefined) payload.primary_color = newSettings.primaryColor;
+    if (newSettings.secondaryColor !== undefined) payload.secondary_color = newSettings.secondaryColor;
+    if (newSettings.accentColor !== undefined) payload.accent_color = newSettings.accentColor;
+    if (newSettings.textColor !== undefined) payload.text_color = newSettings.textColor;
+    if (newSettings.address !== undefined) payload.address = newSettings.address;
+    if (newSettings.phone !== undefined) payload.phone = newSettings.phone;
+    if (newSettings.whatsappNumber !== undefined) payload.whatsapp_number = newSettings.whatsappNumber;
+    if (newSettings.whatsappMessage !== undefined) payload.whatsapp_message = newSettings.whatsappMessage;
+    if (newSettings.email !== undefined) payload.email = newSettings.email;
+    if (newSettings.instagramUrl !== undefined) payload.instagram_url = newSettings.instagramUrl;
+    if (newSettings.facebookUrl !== undefined) payload.facebook_url = newSettings.facebookUrl;
+    if (newSettings.tiktokUrl !== undefined) payload.tiktok_url = newSettings.tiktokUrl;
+    if (newSettings.youtubeUrl !== undefined) payload.youtube_url = newSettings.youtubeUrl;
+    if (newSettings.websiteUrl !== undefined) payload.website_url = newSettings.websiteUrl;
+    if (newSettings.currency !== undefined) payload.currency = newSettings.currency;
+    if (newSettings.slogan !== undefined) payload.slogan = newSettings.slogan;
+    if (newSettings.activeModules !== undefined) payload.active_modules = newSettings.activeModules;
+
+    const { data, error } = await client
+      .from('organization_settings')
+      .update(payload)
+      .eq('organization_id', organizationId)
+      .select()
+      .single();
+
+    if (error) {
+      logger.error('Error al actualizar configuración en Supabase:', error);
+      throw new Error(`Error al guardar configuración del negocio: ${error.message}`);
+    }
+
+    return OrganizationSettingsModel.fromJson(data);
+  }
+
+  /**
+   * Obtiene de forma pública y atómica todos los datos de un negocio por su slug (Fase 7).
+   * Consulta Supabase para traer la organización, branding, categorías activas,
+   * productos activos, servicios activos, horarios y galería.
+   * Cuenta con fallback resiliente para entornos offline o de prueba.
+   */
+  async fetchPublicBusinessData(slugOrId: string): Promise<PublicBusinessData | null> {
+    logger.info('Consultando datos públicos del negocio en Supabase...', { slugOrId });
+
+    try {
+      const client = supabaseService.getClient();
+
+      if (client) {
+        // 1. Buscar la organización por slug o por ID (según formato para evitar error 22P02 en PostgreSQL)
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(slugOrId);
+        let orgQuery = client
+          .from('organizations')
+          .select(`
+            *,
+            organization_settings (
+              id,
+              organization_id,
+              logo_url,
+              cover_url,
+              primary_color,
+              secondary_color,
+              accent_color,
+              text_color,
+              address,
+              phone,
+              whatsapp_number,
+              whatsapp_message,
+              email,
+              instagram_url,
+              facebook_url,
+              tiktok_url,
+              youtube_url,
+              website_url,
+              currency,
+              slogan,
+              active_modules
+            )
+          `);
+
+        if (isUuid) {
+          orgQuery = orgQuery.or(`id.eq.${slugOrId},slug.eq.${slugOrId}`);
+        } else {
+          orgQuery = orgQuery.eq('slug', slugOrId);
+        }
+
+        const { data: orgData, error: orgError } = await orgQuery.maybeSingle();
+
+        if (orgError) {
+          logger.warning('Error consultando organización pública en Supabase:', orgError);
+        } else if (!orgData) {
+          // Si Supabase respondió sin error pero no encontró registro, es un 404 real
+          logger.info('Negocio no encontrado en Supabase por slug o ID:', { slugOrId });
+          return null;
+        } else {
+          const rawSettings = Array.isArray(orgData.organization_settings)
+            ? orgData.organization_settings[0]
+            : orgData.organization_settings;
+
+          const activeModules = (typeof rawSettings?.active_modules === 'object' && rawSettings?.active_modules !== null)
+            ? rawSettings.active_modules
+            : {
+                products: true,
+                services: true,
+                categories: true,
+                orders: true,
+                appointments: true,
+                delivery: true,
+                promotions: true,
+                gallery: true,
+                whatsapp: true,
+                hours: true,
+                location: true,
+                testimonials: true,
+                social: true,
+                notifications: true,
+                analytics: true,
+              };
+
+          const settings: OrganizationSettings = {
+            organization_id: orgData.id,
+            logo_url: rawSettings?.logo_url || '',
+            cover_url: rawSettings?.cover_url || '',
+            primary_color: rawSettings?.primary_color || '#4F46E5',
+            secondary_color: rawSettings?.secondary_color || '#064E3B',
+            accent_color: rawSettings?.accent_color || '#F59E0B',
+            text_color: rawSettings?.text_color || '#111827',
+            address: rawSettings?.address || '',
+            phone: rawSettings?.phone || '',
+            whatsapp_number: rawSettings?.whatsapp_number || '',
+            whatsapp_message: rawSettings?.whatsapp_message || '',
+            email: rawSettings?.email || '',
+            instagram_url: rawSettings?.instagram_url || undefined,
+            facebook_url: rawSettings?.facebook_url || undefined,
+            tiktok_url: rawSettings?.tiktok_url || undefined,
+            youtube_url: rawSettings?.youtube_url || undefined,
+            website_url: rawSettings?.website_url || undefined,
+            currency: rawSettings?.currency || 'S/',
+            slogan: rawSettings?.slogan || orgData.description || '',
+            active_modules: activeModules as any,
+          };
+
+          const organization: Organization = {
+            id: orgData.id,
+            name: orgData.name,
+            slug: orgData.slug,
+            business_type: orgData.business_type as any,
+            description: orgData.description || '',
+            is_active: orgData.is_active,
+            created_by: '', // Sanitizado: 0 fuga de UUID de usuario administrador
+            created_at: orgData.created_at,
+            settings,
+          };
+
+          // Si la organización está inactiva (is_active = false), retornamos solo datos básicos
+          // para que la UI muestre la pantalla de mantenimiento según la regla de la Fase 7.
+          if (!orgData.is_active) {
+            return {
+              organization,
+              settings,
+              categories: [],
+              products: [],
+              services: [],
+              gallery: [],
+              businessHours: [],
+            };
+          }
+
+          // Consultar en paralelo categorías, productos, servicios, horarios y galería (solo activos)
+          const [catRes, prodRes, servRes, hoursRes, galleryRes] = await Promise.all([
+            client
+              .from('categories')
+              .select('*')
+              .eq('organization_id', orgData.id)
+              .eq('is_active', true)
+              .order('display_order', { ascending: true }),
+            client
+              .from('products')
+              .select('*')
+              .eq('organization_id', orgData.id)
+              .eq('is_active', true)
+              .order('display_order', { ascending: true }),
+            client
+              .from('services')
+              .select('*')
+              .eq('organization_id', orgData.id)
+              .eq('is_active', true)
+              .order('display_order', { ascending: true }),
+            client
+              .from('business_hours')
+              .select('*')
+              .eq('organization_id', orgData.id)
+              .order('day_of_week', { ascending: true }),
+            client
+              .from('business_gallery')
+              .select('*')
+              .eq('organization_id', orgData.id)
+              .order('display_order', { ascending: true }),
+          ]);
+
+          const categories: Category[] = (catRes.data || []).map((c: any) => ({
+            id: c.id,
+            organization_id: c.organization_id,
+            name: c.name,
+            description: c.description || undefined,
+            image_url: c.image_url || undefined,
+            icon: c.icon || undefined,
+            type: (c.type as 'PRODUCT' | 'SERVICE') || 'PRODUCT',
+            display_order: c.display_order ?? 0,
+            is_active: c.is_active,
+            created_at: c.created_at,
+          }));
+
+          const products: Product[] = (prodRes.data || []).map((p: any) => {
+            let parsedImages: string[] = [];
+            if (Array.isArray(p.images)) {
+              parsedImages = p.images;
+            } else if (typeof p.images === 'string' && p.images.trim()) {
+              try {
+                const parsed = JSON.parse(p.images);
+                if (Array.isArray(parsed)) parsedImages = parsed;
+              } catch {
+                parsedImages = [p.images];
+              }
+            } else if (p.image_url) {
+              parsedImages = [p.image_url];
+            }
+
+            return {
+              id: p.id,
+              organization_id: p.organization_id,
+              category_id: p.category_id || undefined,
+              name: p.name,
+              description: p.description || '',
+              price: Number(p.price) || 0,
+              promo_price: p.promo_price !== null && p.promo_price !== undefined
+                ? Number(p.promo_price)
+                : (p.promotional_price ? Number(p.promotional_price) : undefined),
+              stock: Number(p.stock) || 0,
+              is_active: p.is_active,
+              is_featured: p.is_featured || false,
+              display_order: p.display_order ?? 0,
+              images: parsedImages,
+              created_at: p.created_at,
+              updated_at: p.updated_at,
+            };
+          });
+
+          const services: ServiceItem[] = (servRes.data || []).map((s: any) => ({
+            id: s.id,
+            organization_id: s.organization_id,
+            category_id: s.category_id || undefined,
+            name: s.name,
+            description: s.description || '',
+            image_url: s.image_url || undefined,
+            price: Number(s.price) || 0,
+            promo_price: s.promo_price !== null && s.promo_price !== undefined
+              ? Number(s.promo_price)
+              : (s.promotional_price ? Number(s.promotional_price) : undefined),
+            duration_minutes: Number(s.duration_minutes) || 30,
+            is_active: s.is_active,
+            is_featured: s.is_featured || false,
+            display_order: s.display_order ?? 0,
+            created_at: s.created_at,
+            updated_at: s.updated_at,
+          }));
+
+          const businessHours: BusinessHour[] = (hoursRes.data || []).map((h: any) => ({
+            id: h.id,
+            organization_id: h.organization_id,
+            day_of_week: Number(h.day_of_week),
+            day_name: h.day_name,
+            open_time: h.open_time || '09:00',
+            close_time: h.close_time || '21:00',
+            is_closed: Boolean(h.is_closed),
+          }));
+
+          const gallery: GalleryItem[] = (galleryRes.data || []).map((g: any) => ({
+            id: g.id,
+            organization_id: g.organization_id,
+            title: g.title || undefined,
+            caption: g.caption || undefined,
+            category: g.category || undefined,
+            image_url: g.image_url,
+            display_order: Number(g.display_order) || 0,
+            created_at: g.created_at,
+          }));
+
+          return {
+            organization,
+            settings,
+            categories,
+            products,
+            services,
+            gallery,
+            businessHours,
+          };
+        }
+      }
+    } catch (err) {
+      logger.warning('Fallo al consultar datos de Supabase, activando fallback local:', err);
+    }
+
+    // --- Fallback Resiliente (para demostraciones o base de datos en standby) ---
+    const localOrg = INITIAL_ORGANIZATIONS.find(
+      (o) => o.slug === slugOrId || o.id === slugOrId
     );
 
-    if (!callerMember || (callerMember.role !== 'owner' && callerMember.role !== 'admin')) {
-      throw new ForbiddenException('Permisos insuficientes para modificar la configuración');
+    if (!localOrg) {
+      return null;
     }
 
-    let existingIndex = allSettings.findIndex(s => s.organization_id === organizationId);
-    const nowIso = new Date().toISOString();
+    const orgId = localOrg.id;
+    const categories = INITIAL_CATEGORIES.filter((c) => c.organization_id === orgId && c.is_active);
+    const products = INITIAL_PRODUCTS.filter((p) => p.organization_id === orgId && p.is_active);
+    const services = INITIAL_SERVICES.filter((s) => s.organization_id === orgId && s.is_active);
+    const businessHours = INITIAL_BUSINESS_HOURS.filter((h) => h.organization_id === orgId);
+    const gallery = INITIAL_GALLERY_ITEMS.filter((g) => g.organization_id === orgId);
 
-    if (existingIndex === -1) {
-      const created = {
-        id: `set-${Date.now()}`,
-        organization_id: organizationId,
-        settings: {
-          language: newSettings.language || 'es',
-          timezone: newSettings.timezone || 'America/Lima',
-          currency: newSettings.currency || 'PEN',
-          ...newSettings.dynamicConfig,
-        },
-        created_at: nowIso,
-        updated_at: nowIso,
-      };
-      allSettings.push(created);
-      existingIndex = allSettings.length - 1;
-    } else {
-      allSettings[existingIndex] = {
-        ...allSettings[existingIndex],
-        settings: {
-          ...allSettings[existingIndex].settings,
-          language: newSettings.language || allSettings[existingIndex].settings.language,
-          timezone: newSettings.timezone || allSettings[existingIndex].settings.timezone,
-          currency: newSettings.currency || allSettings[existingIndex].settings.currency,
-          ...newSettings.dynamicConfig,
-        },
-        updated_at: nowIso,
-      };
-    }
-
-    this.saveLocalSettings(allSettings);
-
-    const saved = allSettings[existingIndex];
     return {
-      id: saved.id,
-      organizationId: saved.organization_id,
-      language: saved.settings.language,
-      timezone: saved.settings.timezone,
-      currency: saved.settings.currency,
-      dynamicConfig: saved.settings,
-      createdAt: saved.created_at,
-      updatedAt: saved.updated_at,
+      organization: localOrg,
+      settings: localOrg.settings || ({} as OrganizationSettings),
+      categories,
+      products,
+      services,
+      gallery,
+      businessHours,
     };
   }
 }

@@ -76,3 +76,35 @@ export class AvatarValidator {
     return null;
   }
 }
+
+export class GoogleMapsValidator {
+  /**
+   * Valida estrictamente que una URL para iframe de mapa provenga exclusivamente
+   * de dominios oficiales de Google Maps, evitando ataques XSS, iframes maliciosos
+   * o esquemas peligrosos como javascript:, data: o vbscript:.
+   */
+  static isSafeEmbedUrl(url?: string | null): boolean {
+    if (!url || typeof url !== 'string') return false;
+    const trimmed = url.trim();
+    if (!trimmed.startsWith('https://')) return false;
+
+    try {
+      const parsed = new URL(trimmed);
+      const validHostnames = [
+        'www.google.com',
+        'google.com',
+        'maps.google.com',
+        'maps.google.com.pe',
+        'www.google.com.pe',
+      ];
+      if (!validHostnames.includes(parsed.hostname.toLowerCase())) {
+        return false;
+      }
+      // Solo rutas legítimas de Google Maps
+      const validPaths = ['/maps/embed', '/maps'];
+      return validPaths.some((p) => parsed.pathname.startsWith(p));
+    } catch {
+      return false;
+    }
+  }
+}

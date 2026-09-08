@@ -10,16 +10,17 @@ import {
   Trash2, 
   Clock, 
   Sparkles, 
-  Layers,
-  Star,
-  CheckCircle2,
-  XCircle,
-  MoveUp,
-  MoveDown,
-  Upload,
-  X,
-  Eye,
-  Scissors
+  Layers, 
+  Star, 
+  CheckCircle2, 
+  XCircle, 
+  MoveUp, 
+  MoveDown, 
+  Upload, 
+  X, 
+  Eye, 
+  Scissors,
+  AlertCircle
 } from 'lucide-react';
 
 export const ServicesScreen: React.FC = () => {
@@ -47,6 +48,8 @@ export const ServicesScreen: React.FC = () => {
   const [isCategoriesModalOpen, setIsCategoriesModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<ServiceItem | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Form states
   const [name, setName] = useState('');
@@ -88,6 +91,7 @@ export const ServicesScreen: React.FC = () => {
     setIsActive(true);
     setIsFeatured(false);
     setDisplayOrder(orgServices.length + 1);
+    setErrorMessage(null);
     setIsModalOpen(true);
   };
 
@@ -103,36 +107,81 @@ export const ServicesScreen: React.FC = () => {
     setIsActive(s.is_active);
     setIsFeatured(!!s.is_featured);
     setDisplayOrder(s.display_order || 1);
+    setErrorMessage(null);
     setIsModalOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !price) return;
+    if (!name || !price || isSubmitting) return;
 
-    const catObj = orgCategories.find(c => c.id === categoryId);
-    const servicePayload = {
-      organization_id: currentOrg.id,
-      name: name.trim(),
-      description: description.trim(),
-      price: parseFloat(price),
-      promo_price: promoPrice ? parseFloat(promoPrice) : undefined,
-      duration_minutes: parseInt(duration, 10) || 30,
-      category_id: categoryId || undefined,
-      category_name: catObj?.name,
-      image_url: imageUrl || 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=600&auto=format&fit=crop&q=80',
-      is_active: isActive,
-      is_featured: isFeatured,
-      display_order: displayOrder || 1
-    };
+    setErrorMessage(null);
+    setIsSubmitting(true);
 
-    if (editingId) {
-      updateService(editingId, servicePayload);
-    } else {
-      addService(servicePayload);
+    try {
+      const catObj = orgCategories.find(c => c.id === categoryId);
+      const parsedPrice = parseFloat(price);
+      const parsedPromo = promoPrice ? parseFloat(promoPrice) : undefined;
+
+      const servicePayload = {
+        organization_id: currentOrg.id,
+        name: name.trim(),
+        description: description.trim(),
+        price: parsedPrice,
+        promo_price: parsedPromo,
+        duration_minutes: parseInt(duration, 10) || 30,
+        category_id: categoryId || undefined,
+        category_name: catObj?.name,
+        image_url: imageUrl || 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=600&auto=format&fit=crop&q=80',
+        is_active: isActive,
+        is_featured: isFeatured,
+        display_order: displayOrder || 1
+      };
+
+      if (editingId) {
+        await updateService(editingId, servicePayload);
+      } else {
+        await addService(servicePayload);
+      }
+
+      setIsModalOpen(false);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Error al guardar el servicio.');
+    } finally {
+      setIsSubmitting(false);
     }
+  };
 
-    setIsModalOpen(false);
+  const handleDeleteService = async (id: string) => {
+    if (isSubmitting) return;
+    setErrorMessage(null);
+    setIsSubmitting(true);
+    try {
+      await deleteService(id);
+      setDeleteCandidate(null);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Error al eliminar el servicio.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleToggleActive = async (id: string) => {
+    setErrorMessage(null);
+    try {
+      await toggleServiceActive(id);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Error al cambiar estado del servicio.');
+    }
+  };
+
+  const handleToggleFeatured = async (id: string) => {
+    setErrorMessage(null);
+    try {
+      await toggleServiceFeatured(id);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Error al destacar el servicio.');
+    }
   };
 
   const handleImageFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -148,7 +197,7 @@ export const ServicesScreen: React.FC = () => {
     }
   };
 
-  const handleMoveService = (index: number, direction: 'UP' | 'DOWN') => {
+  const handleMoveService = async (index: number, direction: 'UP' | 'DOWN') => {
     const newItems = [...filteredServices];
     const targetIndex = direction === 'UP' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= newItems.length) return;
@@ -162,11 +211,31 @@ export const ServicesScreen: React.FC = () => {
       display_order: idx + 1
     }));
 
-    reorderServices(updated);
+    try {
+      await reorderServices(updated);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Error al reordenar los servicios.');
+    }
   };
 
   return (
     <div className="space-y-6 pb-16">
+      {/* Error Alert Banner */}
+      {errorMessage && (
+        <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 flex items-center justify-between gap-3 shadow-xs animate-in fade-in">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+            <span className="text-xs font-semibold">{errorMessage}</span>
+          </div>
+          <button
+            onClick={() => setErrorMessage(null)}
+            className="p-1 rounded-lg hover:bg-rose-100 text-rose-500 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* 1. Header & Summary Stats */}
       <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-xs space-y-5">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -350,7 +419,7 @@ export const ServicesScreen: React.FC = () => {
                   )}
 
                   <button
-                    onClick={() => toggleServiceFeatured(s.id)}
+                    onClick={() => handleToggleFeatured(s.id)}
                     className={`absolute top-3 right-3 p-1.5 rounded-xl backdrop-blur-md transition-all ${
                       s.is_featured ? 'bg-amber-400 text-slate-950 scale-105' : 'bg-black/40 text-white hover:bg-black/60'
                     }`}
@@ -361,7 +430,7 @@ export const ServicesScreen: React.FC = () => {
 
                   <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between">
                     <button
-                      onClick={() => toggleServiceActive(s.id)}
+                      onClick={() => handleToggleActive(s.id)}
                       className={`text-[10px] font-extrabold px-2.5 py-1 rounded-xl backdrop-blur-md flex items-center gap-1.5 transition-all shadow-xs ${
                         s.is_active ? 'bg-emerald-500 text-white' : 'bg-rose-600 text-white'
                       }`}
@@ -583,16 +652,24 @@ export const ServicesScreen: React.FC = () => {
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 text-xs rounded-xl border border-slate-200 text-slate-700 font-bold"
+                  className="px-4 py-2 text-xs rounded-xl border border-slate-200 text-slate-700 font-bold disabled:opacity-50"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold shadow-md"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 text-xs rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold shadow-md disabled:opacity-50 flex items-center gap-2"
                 >
-                  {editingId ? 'Guardar Cambios' : 'Crear Servicio'}
+                  {isSubmitting && <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                  <span>
+                    {isSubmitting 
+                      ? 'Guardando...' 
+                      : (editingId ? 'Guardar Cambios' : 'Crear Servicio')
+                    }
+                  </span>
                 </button>
               </div>
             </form>
@@ -613,19 +690,19 @@ export const ServicesScreen: React.FC = () => {
             </div>
             <div className="grid grid-cols-2 gap-2 pt-2">
               <button
+                disabled={isSubmitting}
                 onClick={() => setDeleteCandidate(null)}
-                className="w-full py-2 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs"
+                className="w-full py-2 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs disabled:opacity-50"
               >
                 Cancelar
               </button>
               <button
-                onClick={() => {
-                  deleteService(deleteCandidate.id);
-                  setDeleteCandidate(null);
-                }}
-                className="w-full py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs"
+                disabled={isSubmitting}
+                onClick={() => handleDeleteService(deleteCandidate.id)}
+                className="w-full py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                Eliminar
+                {isSubmitting && <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                <span>{isSubmitting ? 'Eliminando...' : 'Eliminar'}</span>
               </button>
             </div>
           </div>

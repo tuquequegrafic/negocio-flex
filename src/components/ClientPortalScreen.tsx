@@ -21,7 +21,8 @@ import {
   Facebook,
   Globe,
   Share2,
-  Video
+  Video,
+  AlertCircle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { BrandLogo } from './BrandLogo';
@@ -40,6 +41,7 @@ export const ClientPortalScreen: React.FC = () => {
     clearCart,
     createOrder,
     createAppointment,
+    checkAppointmentOverlap,
     setActiveView 
   } = useApp();
 
@@ -72,6 +74,8 @@ export const ClientPortalScreen: React.FC = () => {
   const [bookingDate, setBookingDate] = useState(new Date().toISOString().split('T')[0]);
   const [bookingTime, setBookingTime] = useState('15:00');
   const [bookingCompleted, setBookingCompleted] = useState<any | null>(null);
+  const [bookingWarning, setBookingWarning] = useState<string | null>(null);
+  const [isBookingSubmitting, setIsBookingSubmitting] = useState(false);
 
   const cartTotal = cart.reduce((acc, item) => acc + (item.product.promo_price || item.product.price) * item.quantity, 0);
   const deliveryFee = modules.delivery ? 6.00 : 0.00;
@@ -114,35 +118,58 @@ export const ClientPortalScreen: React.FC = () => {
     setOrderCompleted(newOrder);
   };
 
-  const handleBookingSubmit = (e: React.FormEvent) => {
+  const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customerName || !customerPhone || !selectedServiceId) return;
+    if (!customerName.trim() || !customerPhone.trim() || !selectedServiceId) return;
 
     const serv = orgServices.find(s => s.id === selectedServiceId);
     if (!serv) return;
 
-    const newApt = createAppointment({
-      organization_id: currentOrg.id,
-      service_id: serv.id,
-      service_name: serv.name,
-      service_price: serv.price,
-      duration_minutes: serv.duration_minutes,
-      customer_name: customerName,
-      customer_phone: customerPhone,
-      appointment_date: bookingDate,
-      start_time: bookingTime,
-      end_time: '16:00',
-      status: 'PENDING',
-      notes: notes || undefined
-    });
+    setBookingWarning(null);
 
-    confetti({
-      particleCount: 90,
-      spread: 60,
-      origin: { y: 0.6 }
-    });
+    const [h, m] = (bookingTime || '10:00').split(':').map(Number);
+    const totalM = ((isNaN(h) ? 10 : h) * 60) + (isNaN(m) ? 0 : m) + (serv.duration_minutes || 30);
+    const endH = Math.floor(totalM / 60) % 24;
+    const endM = totalM % 60;
+    const calculatedEndTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
 
-    setBookingCompleted(newApt);
+    setIsBookingSubmitting(true);
+    try {
+      // Validar solapamiento antes de registrar
+      const hasConflict = await checkAppointmentOverlap(bookingDate, bookingTime, calculatedEndTime);
+      if (hasConflict) {
+        setBookingWarning('El horario seleccionado ya no está disponible. Por favor elige otra hora o fecha.');
+        return;
+      }
+
+      const newApt = await createAppointment({
+        organization_id: currentOrg.id,
+        service_id: serv.id,
+        service_name: serv.name,
+        service_price: serv.price,
+        duration_minutes: serv.duration_minutes,
+        customer_name: customerName.trim(),
+        customer_phone: customerPhone.trim(),
+        appointment_date: bookingDate,
+        start_time: bookingTime,
+        end_time: calculatedEndTime,
+        status: 'PENDING',
+        notes: notes.trim() || undefined
+      });
+
+      confetti({
+        particleCount: 90,
+        spread: 60,
+        origin: { y: 0.6 }
+      });
+
+      setBookingCompleted(newApt);
+    } catch (err: any) {
+      console.error('Error registrando reserva:', err);
+      setBookingWarning(err.message || 'Ocurrió un error al registrar tu cita. Por favor intenta de nuevo.');
+    } finally {
+      setIsBookingSubmitting(false);
+    }
   };
 
   return (
@@ -638,12 +665,20 @@ export const ClientPortalScreen: React.FC = () => {
                 </div>
               </div>
 
+              {bookingWarning && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{bookingWarning}</span>
+                </div>
+              )}
+
               <button
                 type="submit"
-                className="w-full py-3 rounded-xl font-bold text-sm text-white shadow-md transition-all active:scale-95 mt-4"
+                disabled={isBookingSubmitting}
+                className="w-full py-3 rounded-xl font-bold text-sm text-white shadow-md transition-all active:scale-95 mt-4 disabled:opacity-50"
                 style={{ backgroundColor: settings.primary_color }}
               >
-                Confirmar y Solicitar Cita
+                {isBookingSubmitting ? 'Verificando y Agendando...' : 'Confirmar y Solicitar Cita'}
               </button>
             </form>
           )}

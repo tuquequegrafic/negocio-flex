@@ -12,6 +12,7 @@ export interface ProfileEntity {
   readonly phone?: string;
   readonly avatarUrl?: string;
   readonly role: UserRole;
+  readonly isSuperAdmin?: boolean;
   readonly createdAt: string;
   readonly updatedAt?: string;
 }

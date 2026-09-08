@@ -22,6 +22,8 @@ import {
   GetOrganizationMembersUseCase,
   ChangeMemberRoleUseCase,
   RemoveMemberUseCase,
+  GetOrganizationSettingsUseCase,
+  UpdateOrganizationSettingsUseCase,
 } from '../../domain/usecases/organization_usecases';
 import { STORAGE_KEYS } from '../../../../core/constants/app_constants';
 import { useAuth } from '../../../auth/presentation/providers/AuthContext';
@@ -51,6 +53,11 @@ interface OrganizationContextType {
     id: string,
     updates: Partial<OrganizationEntity>
   ) => Promise<OrganizationEntity>;
+  updateSettings: (
+    settings: Partial<OrganizationSettingsEntity>,
+    orgId?: string
+  ) => Promise<OrganizationSettingsEntity>;
+  getSettings: (orgId?: string) => Promise<OrganizationSettingsEntity | null>;
   getOrganizationMembers: (orgId?: string) => Promise<OrganizationMemberEntity[]>;
   changeMemberRole: (targetUserId: string, newRole: OrganizationRole) => Promise<void>;
   removeMember: (targetUserId: string) => Promise<void>;
@@ -75,8 +82,10 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const getMembersUseCase = useMemo(() => new GetOrganizationMembersUseCase(repository), [repository]);
   const changeRoleUseCase = useMemo(() => new ChangeMemberRoleUseCase(repository), [repository]);
   const removeMemberUseCase = useMemo(() => new RemoveMemberUseCase(repository), [repository]);
+  const getSettingsUseCase = useMemo(() => new GetOrganizationSettingsUseCase(repository), [repository]);
+  const updateSettingsUseCase = useMemo(() => new UpdateOrganizationSettingsUseCase(repository), [repository]);
 
-  const currentUserId = user?.id || 'usr-001';
+  const currentUserId = user?.id || '';
 
   /**
    * Carga y sincroniza las organizaciones autorizadas para el usuario actual
@@ -210,6 +219,36 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   };
 
   /**
+   * Actualización de configuración del negocio
+   */
+  const updateSettings = async (
+    settings: Partial<OrganizationSettingsEntity>,
+    orgId?: string
+  ): Promise<OrganizationSettingsEntity> => {
+    const targetOrgId = orgId || activeOrganization?.id;
+    if (!targetOrgId) throw new Error('No hay una organización activa');
+    setError(null);
+    try {
+      const updated = await updateSettingsUseCase.execute(targetOrgId, settings, currentUserId);
+      await refreshOrganizations();
+      return updated;
+    } catch (err: any) {
+      logger.error('Error al actualizar configuración del negocio', err);
+      setError(err?.message || 'No fue posible guardar la configuración.');
+      throw err;
+    }
+  };
+
+  /**
+   * Obtiene la configuración del negocio
+   */
+  const getSettings = async (orgId?: string): Promise<OrganizationSettingsEntity | null> => {
+    const targetOrgId = orgId || activeOrganization?.id;
+    if (!targetOrgId) return null;
+    return await getSettingsUseCase.execute(targetOrgId);
+  };
+
+  /**
    * Obtiene la lista de miembros de la organización especificada o activa
    */
   const getOrganizationMembers = async (orgId?: string): Promise<OrganizationMemberEntity[]> => {
@@ -281,6 +320,8 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         selectOrganization,
         createNewOrganization,
         updateOrganizationInfo,
+        updateSettings,
+        getSettings,
         getOrganizationMembers,
         changeMemberRole,
         removeMember,

@@ -15,6 +15,7 @@ export class ProfileModel implements ProfileEntity {
     public readonly email?: string,
     public readonly phone?: string,
     public readonly avatarUrl?: string,
+    public readonly isSuperAdmin?: boolean,
     public readonly updatedAt?: string,
   ) {}
 
@@ -22,11 +23,12 @@ export class ProfileModel implements ProfileEntity {
     return new ProfileModel(
       json.id,
       json.full_name || json.fullName || 'Usuario',
-      (json.role as UserRole) || 'owner',
+      (json.role as UserRole) || (json.is_super_admin ? 'super_admin' : 'owner'),
       json.created_at || json.createdAt || new Date().toISOString(),
       json.email,
       json.phone,
       json.avatar_url || json.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+      json.is_super_admin ?? json.isSuperAdmin ?? false,
       json.updated_at || json.updatedAt,
     );
   }
@@ -39,6 +41,7 @@ export class ProfileModel implements ProfileEntity {
       phone: this.phone,
       avatar_url: this.avatarUrl,
       role: this.role,
+      is_super_admin: this.isSuperAdmin || false,
       created_at: this.createdAt,
       updated_at: this.updatedAt || new Date().toISOString(),
     };

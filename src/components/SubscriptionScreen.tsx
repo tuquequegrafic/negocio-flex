@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
+import { useSubscription } from '../features/subscriptions/presentation/hooks/useSubscription';
 import { 
   CreditCard, 
   Sparkles, 
@@ -28,7 +29,7 @@ export const SubscriptionScreen: React.FC = () => {
     openUpgradeModal, 
     openCheckoutModal,
     renewSubscription,
-    cancelSubscription,
+    cancelSubscription: cancelSubLegacy,
     updateCustomDomain,
     payments,
     plans,
@@ -37,8 +38,16 @@ export const SubscriptionScreen: React.FC = () => {
     users
   } = useApp();
 
-  const currentSub = getCurrentSubscription();
-  const currentPlan = getCurrentPlan();
+  // Conexión con la única fuente canónica de suscripciones (Fase 9 & 10)
+  const {
+    subscription: subFromHook,
+    currentPlan: planFromHook,
+    cancelSubscription: cancelSubHook,
+    billingHistory,
+  } = useSubscription(currentOrg?.id);
+
+  const currentSub = subFromHook || getCurrentSubscription();
+  const currentPlan = planFromHook || getCurrentPlan();
   const trialDaysRemaining = calculateTrialDaysRemaining(currentSub);
 
   // Custom Domain input state
@@ -53,8 +62,10 @@ export const SubscriptionScreen: React.FC = () => {
   const orgGalleryCount = galleryItems.filter(g => g.organization_id === currentOrg.id).length;
   const orgUsersCount = users.filter(u => u.organization_id === currentOrg.id).length || 1;
 
-  // Payments for this organization
-  const orgPayments = payments.filter(p => p.organization_id === currentOrg.id);
+  // Payments for this organization (preferir billingHistory canónico)
+  const orgPayments = billingHistory && billingHistory.length > 0
+    ? billingHistory
+    : payments.filter(p => p.organization_id === currentOrg.id);
 
   const handleSaveDomain = (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,8 +75,13 @@ export const SubscriptionScreen: React.FC = () => {
     setTimeout(() => setDomainSaved(false), 3000);
   };
 
-  const handleConfirmCancel = () => {
-    cancelSubscription(currentOrg.id);
+  const handleConfirmCancel = async () => {
+    try {
+      await cancelSubHook();
+    } catch {
+      // Fallback controlado
+    }
+    cancelSubLegacy(currentOrg.id);
     setShowCancelConfirm(false);
   };
 

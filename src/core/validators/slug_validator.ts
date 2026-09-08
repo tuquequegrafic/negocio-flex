@@ -8,8 +8,8 @@ export class SlugValidator {
    * Normaliza un texto en un slug URL-safe:
    * "Restaurante El Sabor!" -> "restaurante-el-sabor"
    */
-  static normalize(text: string): string {
-    if (!text) return '';
+  static normalize(text: string, fallbackDefault: boolean = false): string {
+    if (!text) return fallbackDefault ? 'negocio' : '';
     let slug = text.toLowerCase().trim();
 
     // Reemplazo de tildes y caracteres especiales comunes en español
@@ -28,7 +28,7 @@ export class SlugValidator {
     // Elimina guiones consecutivos y guiones al inicio o final
     slug = slug.replace(/-+/g, '-').replace(/^-+|-+$/g, '');
 
-    return slug || 'negocio';
+    return slug || (fallbackDefault ? 'negocio' : '');
   }
 
   /**

@@ -1,301 +1,511 @@
-import React, { useState } from 'react';
-import { useApp } from '../context/AppContext';
-import { formatCurrency, generateWhatsAppLink } from '../core/utils/formatters';
-import { Appointment, AppointmentStatus } from '../types';
-import { 
-  Calendar as CalendarIcon, 
-  Clock, 
-  User, 
-  Phone, 
-  Plus, 
-  CheckCircle2, 
-  XCircle, 
+import React, { useMemo } from 'react';
+import { supabaseService } from '../core/network/supabase_client';
+import { formatCurrency, formatDate } from '../core/utils/formatters';
+import {
+  Calendar as CalendarIcon,
+  Clock,
+  Plus,
+  CheckCircle2,
+  XCircle,
   Search,
-  Sparkles,
-  MessageCircle
+  RefreshCw,
+  X,
+  Trash2,
+  DollarSign,
+  Scissors,
+  Database,
+  Edit3,
 } from 'lucide-react';
+import {
+  useAppointments,
+  AppointmentCard,
+  AppointmentFormModal,
+  AppointmentEntity,
+  AppointmentStatus,
+} from '../features/appointments';
 
 export const AppointmentsScreen: React.FC = () => {
-  const { currentOrg, appointments, services, updateAppointmentStatus, createAppointment } = useApp();
-  const orgAppointments = appointments.filter(a => a.organization_id === currentOrg.id);
-  const orgServices = services.filter(s => s.organization_id === currentOrg.id);
-  const currency = currentOrg.settings?.currency || 'S/';
+  const {
+    appointments,
+    filteredAppointments,
+    services,
+    customers,
+    currency,
+    orgName,
+    organizationId,
+    loading,
+    metrics,
+    searchTerm,
+    selectedStatus,
+    selectedServiceFilter,
+    dateFilterMode,
+    customDate,
+    viewMode,
+    isFormModalOpen,
+    editingAppointment,
+    deleteCandidate,
+    canManageStatus,
+    canReschedule,
+    canDelete,
+    canCreate,
+    setSearchTerm,
+    setSelectedStatus,
+    setSelectedServiceFilter,
+    setDateFilterMode,
+    setCustomDate,
+    setViewMode,
+    setDeleteCandidate,
+    openCreateModal,
+    openEditModal,
+    closeFormModal,
+    updateStatus,
+    deleteAppointment,
+    saveAppointment,
+    checkOverlap,
+    refreshAppointments,
+  } = useAppointments();
 
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
-  // Form states
-  const [customerName, setCustomerName] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
-  const [serviceId, setServiceId] = useState(orgServices[0]?.id || '');
-  const [staffName, setStaffName] = useState('');
-  const [appointmentDate, setAppointmentDate] = useState(new Date().toISOString().split('T')[0]);
-  const [startTime, setStartTime] = useState('16:00');
-  const [notes, setNotes] = useState('');
+  // Hourly slots for Agenda View
+  const hourlySlots = [
+    '08:00', '09:00', '10:00', '11:00', '12:00', '13:00',
+    '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00',
+  ];
 
-  const filteredAppointments = orgAppointments.filter(a => {
-    const matchesStatus = selectedStatus === 'ALL' || a.status === selectedStatus;
-    const matchesSearch = a.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          a.service_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          a.customer_phone.includes(searchTerm);
-    return matchesStatus && matchesSearch;
-  });
-
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customerName || !customerPhone || !serviceId) return;
-
-    const serv = orgServices.find(s => s.id === serviceId);
-    if (!serv) return;
-
-    createAppointment({
-      organization_id: currentOrg.id,
-      service_id: serv.id,
-      service_name: serv.name,
-      service_price: serv.price,
-      duration_minutes: serv.duration_minutes,
-      staff_name: staffName || undefined,
-      customer_name: customerName,
-      customer_phone: customerPhone,
-      appointment_date: appointmentDate,
-      start_time: startTime,
-      end_time: '17:00',
-      status: 'CONFIRMED',
-      notes: notes || undefined
-    });
-
-    setIsModalOpen(false);
-    setCustomerName('');
-    setCustomerPhone('');
-  };
+  const agendaAppointments = useMemo(() => {
+    const targetDate = dateFilterMode === 'CUSTOM' ? customDate : todayStr;
+    return appointments.filter(a => a.appointmentDate === targetDate);
+  }, [appointments, dateFilterMode, customDate, todayStr]);
 
   return (
-    <div className="space-y-6 pb-12">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs">
+    <div className="space-y-6 pb-12 relative">
+      {/* 1. Header with Title, Refresh & Add Button */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-3xl border border-slate-200/80 shadow-xs">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Agenda de Citas & Reservas</h1>
-          <p className="text-sm text-slate-500 mt-0.5">
-            Turnos sincronizados en tiempo real para <strong>{currentOrg.name}</strong>
+          <div className="flex items-center gap-2.5">
+            <span className="text-xl">📅</span>
+            <h1 className="text-2xl font-black text-slate-900">Agenda de Citas & Reservas</h1>
+            {supabaseService.isConfigured && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-purple-700 border border-purple-200">
+                <Database className="w-3 h-3" /> Supabase PostgreSQL
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-slate-500 mt-1">
+            Gestión en tiempo real de turnos y especialistas para <strong>{orgName}</strong>
           </p>
         </div>
 
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold transition-all shadow-sm active:scale-95 text-sm"
-        >
-          <Plus className="w-4 h-4" /> Agendar Nueva Cita
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => refreshAppointments()}
+            disabled={loading}
+            title="Refrescar citas desde Supabase"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-xs font-bold disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-purple-600' : 'text-slate-500'}`} />
+            <span>{loading ? 'Actualizando...' : 'Recargar'}</span>
+          </button>
+
+          {canCreate && (
+            <button
+              onClick={openCreateModal}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold transition-all shadow-xs active:scale-95 text-xs"
+            >
+              <Plus className="w-4 h-4" /> Agendar Nueva Cita
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Filters & Search */}
-      <div className="flex flex-col sm:flex-row items-center gap-4">
-        <div className="relative flex-1 w-full">
-          <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Buscar por cliente, servicio o teléfono..."
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-600"
-          />
+      {/* 2. Top Metrics Bar */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">Citas de Hoy</span>
+            <CalendarIcon className="w-4 h-4 text-purple-600" />
+          </div>
+          <span className="text-2xl font-black text-slate-900 mt-1 block">{metrics.todayCount}</span>
+          <span className="text-[10px] text-slate-400">Activas hoy</span>
         </div>
 
-        <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto">
-          {['ALL', 'PENDING', 'CONFIRMED', 'COMPLETED', 'CANCELLED'].map((st) => (
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">Pendientes</span>
+            <Clock className="w-4 h-4 text-amber-500" />
+          </div>
+          <span className="text-2xl font-black text-amber-600 mt-1 block">{metrics.pendingCount}</span>
+          <span className="text-[10px] text-slate-400">Por confirmar</span>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">Confirmadas</span>
+            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+          </div>
+          <span className="text-2xl font-black text-emerald-600 mt-1 block">{metrics.confirmedCount}</span>
+          <span className="text-[10px] text-slate-400">Listas en agenda</span>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">Completadas</span>
+            <Scissors className="w-4 h-4 text-blue-500" />
+          </div>
+          <span className="text-2xl font-black text-blue-600 mt-1 block">{metrics.completedCount}</span>
+          <span className="text-[10px] text-slate-400">Atendidas</span>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">Canceladas</span>
+            <XCircle className="w-4 h-4 text-rose-500" />
+          </div>
+          <span className="text-2xl font-black text-rose-600 mt-1 block">{metrics.cancelledCount}</span>
+          <span className="text-[10px] text-slate-400">No concretadas</span>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">Valor Estimado</span>
+            <DollarSign className="w-4 h-4 text-purple-600" />
+          </div>
+          <span className="text-xl font-black text-slate-900 mt-1 block truncate">
+            {formatCurrency(metrics.totalRevenueEst, currency)}
+          </span>
+          <span className="text-[10px] text-slate-400">En servicios agendados</span>
+        </div>
+      </div>
+
+      {/* 3. Search & Comprehensive Filters */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs space-y-3">
+        {/* Search and Main Filters Row */}
+        <div className="flex flex-col md:flex-row items-center gap-3">
+          <div className="relative flex-1 w-full">
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Buscar por cliente, teléfono, servicio, especialista o notas..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50/50 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-600 transition-all"
+            />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Service Filter */}
+          <div className="w-full md:w-56">
+            <select
+              value={selectedServiceFilter}
+              onChange={e => setSelectedServiceFilter(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-purple-500/20"
+            >
+              <option value="ALL">Todos los Servicios</option>
+              {services.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* View Mode Toggle */}
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl shrink-0">
             <button
-              key={st}
-              onClick={() => setSelectedStatus(st)}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors ${
-                selectedStatus === st ? 'bg-purple-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+              onClick={() => setViewMode('CARDS')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                viewMode === 'CARDS'
+                  ? 'bg-white text-purple-700 shadow-2xs'
+                  : 'text-slate-500 hover:text-slate-800'
               }`}
             >
-              {st === 'ALL' ? 'Todos' : st}
+              Tarjetas
             </button>
-          ))}
+            <button
+              onClick={() => setViewMode('AGENDA')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                viewMode === 'AGENDA'
+                  ? 'bg-white text-purple-700 shadow-2xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Agenda por Horas
+            </button>
+          </div>
+        </div>
+
+        {/* Date & Status Pills Row */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100 text-xs">
+          {/* Status Tabs */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+            {[
+              { id: 'ALL' as const, label: 'Todos' },
+              { id: 'PENDING' as const, label: 'Pendientes' },
+              { id: 'CONFIRMED' as const, label: 'Confirmadas' },
+              { id: 'COMPLETED' as const, label: 'Completadas' },
+              { id: 'CANCELLED' as const, label: 'Canceladas' },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setSelectedStatus(tab.id)}
+                className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-colors ${
+                  selectedStatus === tab.id
+                    ? 'bg-purple-600 text-white shadow-2xs'
+                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200/60'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Date Filter Tabs */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+            <button
+              onClick={() => setDateFilterMode('ALL')}
+              className={`px-3 py-1.5 rounded-xl font-medium whitespace-nowrap ${
+                dateFilterMode === 'ALL'
+                  ? 'bg-slate-800 text-white'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Cualquier Fecha
+            </button>
+            <button
+              onClick={() => setDateFilterMode('TODAY')}
+              className={`px-3 py-1.5 rounded-xl font-medium whitespace-nowrap ${
+                dateFilterMode === 'TODAY'
+                  ? 'bg-slate-800 text-white'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Hoy
+            </button>
+            <button
+              onClick={() => setDateFilterMode('THIS_WEEK')}
+              className={`px-3 py-1.5 rounded-xl font-medium whitespace-nowrap ${
+                dateFilterMode === 'THIS_WEEK'
+                  ? 'bg-slate-800 text-white'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Esta Semana
+            </button>
+            <button
+              onClick={() => setDateFilterMode('UPCOMING')}
+              className={`px-3 py-1.5 rounded-xl font-medium whitespace-nowrap ${
+                dateFilterMode === 'UPCOMING'
+                  ? 'bg-slate-800 text-white'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Próximas
+            </button>
+            <div className="flex items-center gap-1">
+              <input
+                type="date"
+                value={customDate}
+                onChange={e => {
+                  setCustomDate(e.target.value);
+                  setDateFilterMode('CUSTOM');
+                }}
+                className={`px-2 py-1 rounded-xl border text-xs ${
+                  dateFilterMode === 'CUSTOM'
+                    ? 'border-purple-600 text-purple-700 bg-purple-50 font-bold'
+                    : 'border-slate-200 text-slate-600'
+                }`}
+              />
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Appointments List */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {filteredAppointments.length === 0 ? (
-          <div className="col-span-2 bg-white p-12 rounded-2xl border border-slate-200 text-center space-y-2">
-            <CalendarIcon className="w-10 h-10 text-slate-300 mx-auto" />
-            <h3 className="font-bold text-slate-700 text-sm">No hay citas registradas</h3>
-            <p className="text-xs text-slate-400">Las reservas hechas por clientes o agendadas manualmente aparecerán aquí.</p>
+      {/* 4. Content Presentation: Cards Mode vs Agenda Mode */}
+      {viewMode === 'CARDS' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {filteredAppointments.length === 0 ? (
+            <div className="col-span-2 bg-white p-12 rounded-3xl border border-slate-200/80 text-center space-y-3">
+              <div className="w-14 h-14 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center mx-auto">
+                <CalendarIcon className="w-7 h-7" />
+              </div>
+              <h3 className="font-bold text-slate-800 text-base">No se encontraron citas</h3>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                {searchTerm
+                  ? 'No hay citas que coincidan con los criterios de búsqueda.'
+                  : 'No hay citas registradas para los filtros seleccionados.'}
+              </p>
+              {canCreate && (
+                <button
+                  onClick={openCreateModal}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 text-white font-semibold text-xs mt-2 hover:bg-purple-700 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Crear Primera Cita
+                </button>
+              )}
+            </div>
+          ) : (
+            filteredAppointments.map(apt => (
+              <AppointmentCard
+                key={apt.id}
+                appointment={apt}
+                currency={currency}
+                orgName={orgName}
+                canManageStatus={canManageStatus}
+                canReschedule={canReschedule}
+                canDelete={canDelete}
+                onUpdateStatus={updateStatus}
+                onEdit={openEditModal}
+                onDeleteRequest={a => setDeleteCandidate(a)}
+              />
+            ))
+          )}
+        </div>
+      ) : (
+        /* Agenda View by Hours */
+        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-2xs space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <CalendarIcon className="w-4 h-4 text-purple-600" />
+              <span>Turnos para: {formatDate(dateFilterMode === 'CUSTOM' ? customDate : todayStr)}</span>
+            </h3>
+            <span className="text-xs text-slate-400">
+              {agendaAppointments.length} cita(s) programada(s)
+            </span>
           </div>
-        ) : (
-          filteredAppointments.map(apt => (
-            <div key={apt.id} className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-start gap-3">
-                  <div className="w-12 h-12 rounded-xl bg-purple-50 border border-purple-200 text-purple-700 flex flex-col items-center justify-center font-bold shrink-0">
-                    <span className="text-[10px] uppercase font-mono">{apt.appointment_date.split('-')[1]}/{apt.appointment_date.split('-')[2]}</span>
-                    <span className="text-xs">{apt.start_time}</span>
+
+          <div className="divide-y divide-slate-100">
+            {hourlySlots.map(slot => {
+              const [slotH] = slot.split(':').map(Number);
+              const nextHStr = `${String(slotH + 1).padStart(2, '0')}:00`;
+
+              const slotAppointments = agendaAppointments.filter(
+                a => a.startTime >= slot && a.startTime < nextHStr
+              );
+
+              return (
+                <div
+                  key={slot}
+                  className="py-3 flex items-start gap-4 hover:bg-slate-50/50 rounded-xl transition-colors px-2"
+                >
+                  <div className="w-16 text-xs font-mono font-bold text-slate-400 shrink-0 pt-1">
+                    {slot}
                   </div>
 
-                  <div>
-                    <h3 className="font-bold text-sm text-slate-900">{apt.service_name}</h3>
-                    <span className="text-xs text-slate-500 block mt-0.5">
-                      Duración: {apt.duration_minutes} min • <strong>{formatCurrency(apt.service_price, currency)}</strong>
-                    </span>
-                    {apt.staff_name && (
-                      <span className="text-[11px] text-purple-600 font-semibold block mt-0.5">
-                        Especialista: {apt.staff_name}
-                      </span>
+                  <div className="flex-1 min-h-[40px] flex flex-col gap-2">
+                    {slotAppointments.length === 0 ? (
+                      <div className="h-8 flex items-center text-xs text-slate-300 italic">
+                        Disponible
+                      </div>
+                    ) : (
+                      slotAppointments.map(apt => (
+                        <div
+                          key={apt.id}
+                          className={`p-3 rounded-xl border flex items-center justify-between text-xs transition-all ${
+                            apt.status === 'CONFIRMED'
+                              ? 'bg-purple-50/70 border-purple-200 text-purple-900'
+                              : apt.status === 'COMPLETED'
+                              ? 'bg-blue-50 border-blue-200 text-blue-900'
+                              : apt.status === 'PENDING'
+                              ? 'bg-amber-50 border-amber-200 text-amber-900'
+                              : 'bg-slate-100 border-slate-200 text-slate-600'
+                          }`}
+                        >
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-900">{apt.customerName}</span>
+                              <span className="text-[11px] font-mono text-slate-500">
+                                ({apt.startTime} - {apt.endTime})
+                              </span>
+                              <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-white/80 border border-slate-200">
+                                {apt.serviceName}
+                              </span>
+                            </div>
+                            {apt.staffName && (
+                              <span className="text-[11px] text-purple-700 block">
+                                Especialista: <strong>{apt.staffName}</strong>
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-bold">
+                              {formatCurrency(apt.servicePrice, currency)}
+                            </span>
+                            {canReschedule && (
+                              <button
+                                onClick={() => openEditModal(apt)}
+                                className="p-1 rounded hover:bg-white/80 text-slate-600"
+                                title="Editar cita"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))
                     )}
                   </div>
                 </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
-                <select
-                  value={apt.status}
-                  onChange={e => updateAppointmentStatus(apt.id, e.target.value as AppointmentStatus)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold uppercase border ${
-                    apt.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
-                    apt.status === 'PENDING' ? 'bg-amber-50 text-amber-800 border-amber-200' :
-                    apt.status === 'COMPLETED' ? 'bg-blue-50 text-blue-800 border-blue-200' : 'bg-slate-100 text-slate-700 border-slate-200'
-                  }`}
-                >
-                  <option value="PENDING">PENDIENTE</option>
-                  <option value="CONFIRMED">CONFIRMADO</option>
-                  <option value="COMPLETED">COMPLETADO</option>
-                  <option value="CANCELLED">CANCELADO</option>
-                </select>
-              </div>
+      {/* 5. Create / Edit Appointment Modal */}
+      <AppointmentFormModal
+        isOpen={isFormModalOpen}
+        onClose={closeFormModal}
+        onSubmit={saveAppointment}
+        editingAppointment={editingAppointment}
+        services={services}
+        customers={customers}
+        organizationId={organizationId}
+        currency={currency}
+        checkOverlap={checkOverlap}
+      />
 
-              {/* Customer Box */}
-              <div className="p-3 bg-slate-50 rounded-xl flex items-center justify-between text-xs">
-                <div>
-                  <span className="font-bold text-slate-800 block">{apt.customer_name}</span>
-                  <span className="text-slate-500 text-[11px]">{apt.customer_phone}</span>
-                </div>
-
-                <a
-                  href={generateWhatsAppLink(
-                    apt.customer_phone,
-                    `¡Hola ${apt.customer_name}! Te recordamos tu cita de "${apt.service_name}" en ${currentOrg.name} para el día ${apt.appointment_date} a las ${apt.start_time}.`
-                  )}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs"
-                >
-                  <MessageCircle className="w-3.5 h-3.5" /> Recordar
-                </a>
-              </div>
-
-              {apt.notes && (
-                <p className="text-xs text-slate-500 italic bg-amber-50/50 p-2 rounded-lg border border-amber-100">
-                  Nota: {apt.notes}
-                </p>
-              )}
+      {/* 6. Delete Confirmation Dialog */}
+      {deleteCandidate && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
             </div>
-          ))
-        )}
-      </div>
 
-      {/* Modal Form */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h2 className="text-lg font-bold text-slate-900">Agendar Cita / Reserva</h2>
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600 font-bold">
-                ✕
+            <div className="text-center space-y-1">
+              <h3 className="text-base font-bold text-slate-900">¿Eliminar esta cita?</h3>
+              <p className="text-xs text-slate-500">
+                Esta acción eliminará permanentemente la cita de{' '}
+                <strong>{deleteCandidate.customerName}</strong> para el servicio{' '}
+                <strong>{deleteCandidate.serviceName}</strong> de Supabase PostgreSQL.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteCandidate(null)}
+                className="flex-1 py-2.5 text-xs rounded-xl border border-slate-200 text-slate-700 font-bold hover:bg-slate-50 transition-colors"
+              >
+                Conservar
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteAppointment(deleteCandidate.id)}
+                className="flex-1 py-2.5 text-xs rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold transition-colors shadow-2xs"
+              >
+                Sí, Eliminar
               </button>
             </div>
-
-            <form onSubmit={handleCreate} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Servicio</label>
-                <select
-                  value={serviceId}
-                  onChange={e => setServiceId(e.target.value)}
-                  className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-300 focus:ring-2 focus:ring-purple-500/20"
-                >
-                  {orgServices.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} - {formatCurrency(s.price, currency)} ({s.duration_minutes} min)
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Nombre del Cliente</label>
-                  <input
-                    type="text"
-                    required
-                    value={customerName}
-                    onChange={e => setCustomerName(e.target.value)}
-                    placeholder="Ej: Lucía Ramírez"
-                    className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-300"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Teléfono / WhatsApp</label>
-                  <input
-                    type="text"
-                    required
-                    value={customerPhone}
-                    onChange={e => setCustomerPhone(e.target.value)}
-                    placeholder="+51 987 654 321"
-                    className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-300"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Fecha</label>
-                  <input
-                    type="date"
-                    required
-                    value={appointmentDate}
-                    onChange={e => setAppointmentDate(e.target.value)}
-                    className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-300"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Hora Inicio</label>
-                  <input
-                    type="time"
-                    required
-                    value={startTime}
-                    onChange={e => setStartTime(e.target.value)}
-                    className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-300"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Especialista / Empleado Asignado</label>
-                <input
-                  type="text"
-                  value={staffName}
-                  onChange={e => setStaffName(e.target.value)}
-                  placeholder="Ej: Valeria Rossi"
-                  className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-300"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 text-sm rounded-xl border border-slate-200 text-slate-700 font-medium"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 text-sm rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold"
-                >
-                  Confirmar Reserva
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}
